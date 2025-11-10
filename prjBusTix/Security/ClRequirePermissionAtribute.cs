@@ -23,6 +23,27 @@ namespace prjBusTix.Security
 
             Policy = POLICY_PREFIX + permission.Trim();
         }
+    }
 
+    /// <summary>
+    /// Alias para RequirePermissionAttribute con el prefijo Cl
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Class | AttributeTargets.Method, AllowMultiple = true)]
+    public sealed class ClRequirePermissionAttribute : AuthorizeAttribute
+    {
+        private const string POLICY_PREFIX = "Permission:";
+
+        /// <summary>
+        /// Crea una nueva instancia del atributo con el permiso requerido.
+        /// </summary>
+        /// <param name="permission">Permiso en formato "modulo:accion" o "*" para acceso total.</param>
+        public ClRequirePermissionAttribute(string permission)
+        {
+            if (string.IsNullOrWhiteSpace(permission))
+                throw new ArgumentException("El permiso no puede estar vacío.", nameof(permission));
+
+            Policy = POLICY_PREFIX + permission.Trim();
+        }
     }
 }
+

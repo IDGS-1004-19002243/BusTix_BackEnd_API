@@ -1,4 +1,4 @@
-﻿using System.ComponentModel.DataAnnotations;
+﻿﻿using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace prjBusTix.Model
@@ -20,6 +20,9 @@ namespace prjBusTix.Model
         public string RolEnViaje { get; set; } = string.Empty; // Validador, Supervisor, Auxiliar
         
         public DateTime FechaAsignacion { get; set; } = DateTime.Now;
+        
+        [MaxLength(500)]
+        public string? Observaciones { get; set; }
         
         // Relaciones
         [ForeignKey(nameof(ViajeID))]

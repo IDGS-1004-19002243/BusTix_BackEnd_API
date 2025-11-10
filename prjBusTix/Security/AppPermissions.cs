@@ -21,6 +21,15 @@ namespace prjBusTix.Security
         public const string Reports_View = "reports:view";
         public const string Reports_Generate = "reports:generate";
 
+        // Permisos para módulo de Incidencias
+        public static class Incidencias
+        {
+            public const string View = "incidencias:view";
+            public const string Create = "incidencias:create";
+            public const string Update = "incidencias:update";
+            public const string Delete = "incidencias:delete";
+        }
+
         // Mapa de permisos por rol
         public static readonly Dictionary<string, string[]> RolePermissions = new()
         {
@@ -48,7 +57,9 @@ namespace prjBusTix.Security
                     Tickets_Create,
                     Tickets_Edit,
                     Reports_View,
-                    Reports_Generate
+                    Reports_Generate,
+                    Incidencias.View,
+                    Incidencias.Update
                 }
             },
             {
@@ -58,6 +69,13 @@ namespace prjBusTix.Security
                     Tickets_Create,
                     Tickets_Edit,
                     Users_View
+                }
+            },
+            {
+                "Staff", new[]
+                {
+                    Incidencias.View,
+                    Incidencias.Create
                 }
             }
         };

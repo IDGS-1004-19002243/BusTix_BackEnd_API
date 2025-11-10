@@ -1,4 +1,4 @@
-﻿﻿﻿using prjBusTix.Dto.Auth;
+﻿using prjBusTix.Dto.Auth;
 using prjBusTix.Dto.Users;
 using prjBusTix.Model;
 using prjBusTix.Security;
@@ -93,10 +93,73 @@ namespace prjBusTix.Controllers
                 }
             }
 
+            // ✅ ENVIAR EMAIL DE CONFIRMACIÓN AUTOMÁTICAMENTE
+            try
+            {
+                var token = await _userManager.GenerateEmailConfirmationTokenAsync(user);
+                var confirmationLink = $"http://localhost:4200/confirm-email?email={user.Email}&token={WebUtility.UrlEncode(token)}";
+
+                var mailSettings = _configuration.GetSection("MailSettings");
+                var senderEmail = mailSettings["SenderEmail"];
+                var senderName = mailSettings["SenderName"];
+                var smtpServer = mailSettings["Server"];
+                var smtpPortString = mailSettings["Port"];
+                var smtpPort = smtpPortString != null ? int.Parse(smtpPortString) : 587;
+                var smtpUser = mailSettings["UserName"];
+                var smtpPass = mailSettings["Password"];
+
+                var message = new MimeKit.MimeMessage();
+                message.From.Add(new MimeKit.MailboxAddress(senderName, senderEmail));
+                message.To.Add(new MimeKit.MailboxAddress(user.NombreCompleto, user.Email)); // Eliminado operador ?? redundante
+                message.Subject = "Confirma tu email - BusTix";
+
+                var htmlBody = $@"
+                <div style='font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;'>
+                    <div style='background-color: #007bff; padding: 20px; text-align: center;'>
+                        <h1 style='color: white; margin: 0;'>🚌 BusTix</h1>
+                    </div>
+                    <div style='padding: 30px; background-color: #f8f9fa;'>
+                        <h2 style='color: #333;'>¡Bienvenido {user.NombreCompleto ?? "Usuario"}!</h2>
+                        <p style='color: #666; font-size: 16px; line-height: 1.6;'>
+                            Tu cuenta ha sido creada exitosamente. Para completar tu registro,
+                            por favor confirma tu dirección de email haciendo clic en el siguiente botón:
+                        </p>
+                        <div style='text-align: center; margin: 30px 0;'>
+                            <a href='{confirmationLink}' style='
+                                display: inline-block;
+                                padding: 15px 30px;
+                                background-color: #28a745;
+                                color: white;
+                                text-decoration: none;
+                                border-radius: 5px;
+                                font-weight: bold;
+                                font-size: 16px;
+                            '>✅ Confirmar Email</a>
+                        </div>
+                        <p style='color: #999; font-size: 14px;'>
+                            Este link expira en 24 horas.
+                        </p>
+                    </div>
+                </div>";
+
+                message.Body = new MimeKit.TextPart("html") { Text = htmlBody };
+
+                using var client = new MailKit.Net.Smtp.SmtpClient();
+                await client.ConnectAsync(smtpServer, smtpPort, MailKit.Security.SecureSocketOptions.StartTls);
+                await client.AuthenticateAsync(smtpUser, smtpPass);
+                await client.SendAsync(message);
+                await client.DisconnectAsync(true);
+            }
+            catch (Exception ex)
+            {
+                // Log pero no falla el registro
+                Console.WriteLine($"Error al enviar email de confirmación: {ex.Message}");
+            }
+
             return Ok(new AuthResponseDto
             {
                 IsSuccess = true,
-                Message = "Account Created Sucessfully!!!"
+                Message = "Cuenta creada exitosamente. Por favor revisa tu email para confirmar tu cuenta."
             });
         }
 
@@ -118,6 +181,16 @@ namespace prjBusTix.Controllers
                 {
                     IsSuccess = false,
                     Message = "Usuario no encontrado con este email"
+                });
+            }
+
+            // ✅ VERIFICAR SI EL EMAIL ESTÁ CONFIRMADO
+            if (!await _userManager.IsEmailConfirmedAsync(user))
+            {
+                return Unauthorized(new AuthResponseDto
+                {
+                    IsSuccess = false,
+                    Message = "Por favor confirma tu email antes de iniciar sesión. Revisa tu bandeja de entrada."
                 });
             }
 
@@ -237,12 +310,12 @@ namespace prjBusTix.Controllers
             // Enviar correo con HTML
             var message = new MimeKit.MimeMessage();
             message.From.Add(new MimeKit.MailboxAddress(displayName, email));
-            message.To.Add(new MimeKit.MailboxAddress(user.NombreCompleto ?? user.Email, user.Email));
+            message.To.Add(new MimeKit.MailboxAddress(user.NombreCompleto, user.Email)); // Eliminado operador ?? redundante
             message.Subject = "Recuperación de contraseña";
 
             var htmlBody = $@"
         <div style='font-family: Arial, sans-serif; color: #333;'>
-            <h2>Hola {user.NombreCompleto ?? user.Email},</h2>
+            <h2>Hola {user.NombreCompleto ?? "Usuario"},</h2>
             <p>Recibimos una solicitud para restablecer tu contraseña.</p>
             <p>
                 <a href='{resetLink}' style='
@@ -364,7 +437,7 @@ namespace prjBusTix.Controllers
             {
                 new(JwtRegisteredClaimNames.Sub, user.Id),
                 new(JwtRegisteredClaimNames.Email, user.Email ?? ""),
-                new(JwtRegisteredClaimNames.Name, user.NombreCompleto ?? ""),
+                new(JwtRegisteredClaimNames.Name, user.NombreCompleto), // Eliminado operador ?? redundante
                 new("estatus", user.Estatus.ToString()),
                 new("emailVerified", user.EmailConfirmed.ToString()),
                 new(JwtRegisteredClaimNames.Aud, jwtSection["ValidAudience"]!),
@@ -491,6 +564,7 @@ namespace prjBusTix.Controllers
 
             if (user != null)
             {
+                // Invalidar refresh token
                 user.RefreshToken = null;
                 user.RefreshTokenExpiryTime = DateTime.MinValue;
                 await _userManager.UpdateAsync(user);
@@ -499,7 +573,83 @@ namespace prjBusTix.Controllers
             return Ok(new AuthResponseDto
             {
                 IsSuccess = true,
-                Message = "Logout successful"
+                Message = "Sesión cerrada exitosamente"
+            });
+        }
+
+        // api/account/refresh-token
+        [AllowAnonymous]
+        [HttpPost("refresh-token")]
+        public async Task<IActionResult> RefreshToken([FromBody] RefreshTokenDto refreshTokenDto)
+        {
+            if (!ModelState.IsValid)
+                return BadRequest(ModelState);
+
+            var user = await _userManager.FindByEmailAsync(refreshTokenDto.Email);
+
+            if (user == null)
+            {
+                return Unauthorized(new AuthResponseDto
+                {
+                    IsSuccess = false,
+                    Message = "Usuario no encontrado"
+                });
+            }
+
+            // Verificar que el refresh token sea válido y no haya expirado
+            if (user.RefreshToken != refreshTokenDto.RefreshToken || 
+                user.RefreshTokenExpiryTime <= DateTime.UtcNow)
+            {
+                return Unauthorized(new AuthResponseDto
+                {
+                    IsSuccess = false,
+                    Message = "Token de actualización inválido o expirado. Por favor inicia sesión nuevamente."
+                });
+            }
+
+            // Generar nuevo access token y refresh token
+            var newAccessToken = await GenerateToken(user);
+            var newRefreshToken = GenerateRefreshToken();
+
+            _ = int.TryParse(_configuration.GetSection("JWTSettings").GetSection("RefreshTokenValidityIn").Value!, out int refreshTokenValidityIn);
+            user.RefreshToken = newRefreshToken;
+            user.RefreshTokenExpiryTime = DateTime.UtcNow.AddMinutes(refreshTokenValidityIn);
+            await _userManager.UpdateAsync(user);
+
+            return Ok(new AuthResponseDto
+            {
+                Token = newAccessToken,
+                RefreshToken = newRefreshToken,
+                IsSuccess = true,
+                Message = "Token actualizado exitosamente"
+            });
+        }
+
+        // api/account/revoke-token/{userId}
+        [HttpPost("revoke-token/{userId}")]
+        [Authorize(Roles = "Admin")]
+        public async Task<IActionResult> RevokeToken(string userId)
+        {
+            var user = await _userManager.FindByIdAsync(userId);
+
+            if (user == null)
+            {
+                return NotFound(new AuthResponseDto
+                {
+                    IsSuccess = false,
+                    Message = "Usuario no encontrado"
+                });
+            }
+
+            // Revocar refresh token del usuario
+            user.RefreshToken = null;
+            user.RefreshTokenExpiryTime = DateTime.MinValue;
+            await _userManager.UpdateAsync(user);
+
+            return Ok(new AuthResponseDto
+            {
+                IsSuccess = true,
+                Message = $"Token del usuario {user.Email} revocado exitosamente. El usuario deberá iniciar sesión nuevamente."
             });
         }
 
@@ -529,65 +679,6 @@ namespace prjBusTix.Controllers
             });
         }
 
-        // api/account/refresh-token
-        [AllowAnonymous]
-        [HttpPost("refresh-token")]
-        public async Task<ActionResult<AuthResponseDto>> RefreshToken([FromBody] RefreshTokenDto refreshTokenDto)
-        {
-            if (!ModelState.IsValid)
-            {
-                return BadRequest(ModelState);
-            }
-
-            var user = await _userManager.FindByEmailAsync(refreshTokenDto.Email);
-
-            if (user == null)
-            {
-                return Unauthorized(new AuthResponseDto
-                {
-                    IsSuccess = false,
-                    Message = "Invalid email"
-                });
-            }
-
-            // Validar refresh token
-            if (user.RefreshToken != refreshTokenDto.RefreshToken)
-            {
-                return Unauthorized(new AuthResponseDto
-                {
-                    IsSuccess = false,
-                    Message = "Invalid refresh token"
-                });
-            }
-
-            // Validar expiración del refresh token
-            if (user.RefreshTokenExpiryTime <= DateTime.UtcNow)
-            {
-                return Unauthorized(new AuthResponseDto
-                {
-                    IsSuccess = false,
-                    Message = "Refresh token expired"
-                });
-            }
-
-            // Generar nuevo access token
-            var token = await GenerateToken(user);
-            var newRefreshToken = GenerateRefreshToken();
-            
-            _ = int.TryParse(_configuration.GetSection("JWTSettings").GetSection("RefreshTokenValidityIn").Value!, out int refreshTokenValidityIn);
-            
-            user.RefreshToken = newRefreshToken;
-            user.RefreshTokenExpiryTime = DateTime.UtcNow.AddMinutes(refreshTokenValidityIn);
-            await _userManager.UpdateAsync(user);
-
-            return Ok(new AuthResponseDto
-            {
-                Token = token,
-                RefreshToken = newRefreshToken,
-                IsSuccess = true,
-                Message = "Token refreshed successfully"
-            });
-        }
 
         // ========== NUEVOS ENDPOINTS PARA GESTIÓN MEJORADA DE USUARIOS ==========
 
@@ -1073,10 +1164,321 @@ namespace prjBusTix.Controllers
 
             return Ok(new
             {
-                Threshold = threshold,
-                MaxAttempts = maxAttempts,
                 TotalUsersAtRisk = usersAtRisk.Count,
                 UsersAtRisk = usersAtRisk
+            });
+        }
+
+        // ✅ api/account/confirm-email (Confirmar email - Devuelve HTML)
+        [AllowAnonymous]
+        [HttpGet("confirm-email")]
+        public async Task<IActionResult> ConfirmEmail([FromQuery] string email, [FromQuery] string token)
+        {
+            string htmlResponse;
+
+            if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(token))
+            {
+                htmlResponse = GenerateConfirmationHtml(false, "Email y token son requeridos", email);
+                return Content(htmlResponse, "text/html");
+            }
+
+            var user = await _userManager.FindByEmailAsync(email);
+            if (user == null)
+            {
+                htmlResponse = GenerateConfirmationHtml(false, "Usuario no encontrado", email);
+                return Content(htmlResponse, "text/html");
+            }
+
+            if (user.EmailConfirmed)
+            {
+                htmlResponse = GenerateConfirmationHtml(true, "Tu email ya ha sido confirmado anteriormente. Ya puedes iniciar sesión.", email);
+                return Content(htmlResponse, "text/html");
+            }
+
+            var result = await _userManager.ConfirmEmailAsync(user, token);
+
+            if (!result.Succeeded)
+            {
+                htmlResponse = GenerateConfirmationHtml(false, "Error al confirmar el email. El token puede haber expirado.", email);
+                return Content(htmlResponse, "text/html");
+            }
+
+            htmlResponse = GenerateConfirmationHtml(true, "¡Email confirmado exitosamente! Ya puedes iniciar sesión en BusTix.", email);
+            return Content(htmlResponse, "text/html");
+        }
+
+        // Método helper para generar HTML de confirmación
+        private string GenerateConfirmationHtml(bool success, string message, string? email)
+        {
+            var iconColor = success ? "#28a745" : "#dc3545";
+            var icon = success ? "✅" : "❌";
+            var title = success ? "¡Confirmación Exitosa!" : "Error de Confirmación";
+            var backgroundColor = success ? "#d4edda" : "#f8d7da";
+            var borderColor = success ? "#c3e6cb" : "#f5c6cb";
+            var textColor = success ? "#155724" : "#721c24";
+
+            return $@"
+<!DOCTYPE html>
+<html lang='es'>
+<head>
+    <meta charset='UTF-8'>
+    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+    <title>{title} - BusTix</title>
+    <style>
+        * {{
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }}
+        body {{
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }}
+        .container {{
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 500px;
+            width: 100%;
+            padding: 40px;
+            text-align: center;
+        }}
+        .icon {{
+            font-size: 80px;
+            margin-bottom: 20px;
+        }}
+        h1 {{
+            color: {iconColor};
+            margin-bottom: 20px;
+            font-size: 28px;
+        }}
+        .message-box {{
+            background-color: {backgroundColor};
+            border: 1px solid {borderColor};
+            color: {textColor};
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 30px;
+            line-height: 1.6;
+        }}
+        .email {{
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 30px;
+        }}
+        .btn {{
+            display: inline-block;
+            padding: 15px 30px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            text-decoration: none;
+            border-radius: 10px;
+            font-weight: bold;
+            transition: transform 0.3s;
+        }}
+        .btn:hover {{
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }}
+        .footer {{
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #e0e0e0;
+            color: #666;
+            font-size: 12px;
+        }}
+    </style>
+</head>
+<body>
+    <div class='container'>
+        <div class='icon'>{icon}</div>
+        <h1>{title}</h1>
+        <div class='message-box'>
+            {message}
+        </div>
+        {(string.IsNullOrEmpty(email) ? "" : $"<p class='email'>📧 {email}</p>")}
+        {(success ? "<a href='http://localhost:4200/login' class='btn'>Ir al Login</a>" : "<a href='javascript:history.back()' class='btn'>Volver</a>")}
+        <div class='footer'>
+            <p>🚌 BusTix - Sistema de Gestión de Boletos</p>
+            <p>© 2025 Todos los derechos reservados</p>
+        </div>
+    </div>
+</body>
+</html>";
+        }
+
+        // ✅ api/account/resend-confirmation-email (Reenviar email de confirmación)
+        [AllowAnonymous]
+        [HttpPost("resend-confirmation-email")]
+        public async Task<ActionResult<AuthResponseDto>> ResendConfirmationEmail([FromBody] string email)
+        {
+            if (string.IsNullOrWhiteSpace(email))
+            {
+                return BadRequest(new AuthResponseDto
+                {
+                    IsSuccess = false,
+                    Message = "Email es requerido"
+                });
+            }
+
+            var user = await _userManager.FindByEmailAsync(email);
+            if (user == null)
+            {
+                // Por seguridad, no revelar si el usuario existe
+                return Ok(new AuthResponseDto
+                {
+                    IsSuccess = true,
+                    Message = "Si el email existe, recibirás un correo de confirmación"
+                });
+            }
+
+            if (user.EmailConfirmed)
+            {
+                return Ok(new AuthResponseDto
+                {
+                    IsSuccess = true,
+                    Message = "El email ya está confirmado"
+                });
+            }
+
+            // Generar token de confirmación
+            var token = await _userManager.GenerateEmailConfirmationTokenAsync(user);
+            var confirmationLink = $"http://localhost:4200/confirm-email?email={user.Email}&token={WebUtility.UrlEncode(token)}";
+
+            // Leer configuración de correo
+            var mailSettings = _configuration.GetSection("MailSettings");
+            var senderEmail = mailSettings["SenderEmail"];
+            var senderName = mailSettings["SenderName"];
+            var smtpServer = mailSettings["Server"];
+            var smtpPortString = mailSettings["Port"];
+            var smtpPort = smtpPortString != null ? int.Parse(smtpPortString) : 587;
+            var smtpUser = mailSettings["UserName"];
+            var smtpPass = mailSettings["Password"];
+
+            try
+            {
+                // Enviar correo con HTML
+                var message = new MimeKit.MimeMessage();
+                message.From.Add(new MimeKit.MailboxAddress(senderName, senderEmail));
+                message.To.Add(new MimeKit.MailboxAddress(user.NombreCompleto, user.Email)); // Eliminado operador ?? redundante
+                message.Subject = "Confirma tu email - BusTix";
+
+                var htmlBody = $@"
+                <div style='font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;'>
+                    <div style='background-color: #007bff; padding: 20px; text-align: center;'>
+                        <h1 style='color: white; margin: 0;'>🚌 BusTix</h1>
+                    </div>
+                    <div style='padding: 30px; background-color: #f8f9fa;'>
+                        <h2 style='color: #333;'>¡Hola {user.NombreCompleto ?? "Usuario"}!</h2>
+                        <p style='color: #666; font-size: 16px; line-height: 1.6;'>
+                            Gracias por registrarte en BusTix. Para completar tu registro y poder acceder a tu cuenta,
+                            por favor confirma tu dirección de email haciendo clic en el siguiente botón:
+                        </p>
+                        <div style='text-align: center; margin: 30px 0;'>
+                            <a href='{confirmationLink}' style='
+                                display: inline-block;
+                                padding: 15px 30px;
+                                background-color: #28a745;
+                                color: white;
+                                text-decoration: none;
+                                border-radius: 5px;
+                                font-weight: bold;
+                                font-size: 16px;
+                            '>✅ Confirmar Email</a>
+                        </div>
+                        <p style='color: #999; font-size: 14px;'>
+                            Si no solicitaste esta confirmación, puedes ignorar este email.
+                        </p>
+                        <p style='color: #999; font-size: 12px;'>
+                            Este link expira en 24 horas.
+                        </p>
+                    </div>
+                    <div style='background-color: #343a40; padding: 15px; text-align: center;'>
+                        <p style='color: #adb5bd; font-size: 12px; margin: 0;'>
+                            © 2025 BusTix - Sistema de Gestión de Boletos
+                        </p>
+                    </div>
+                </div>";
+
+                message.Body = new MimeKit.TextPart("html") { Text = htmlBody };
+
+                using var client = new MailKit.Net.Smtp.SmtpClient();
+                await client.ConnectAsync(smtpServer, smtpPort, MailKit.Security.SecureSocketOptions.StartTls);
+                await client.AuthenticateAsync(smtpUser, smtpPass);
+                await client.SendAsync(message);
+                await client.DisconnectAsync(true);
+
+                return Ok(new AuthResponseDto
+                {
+                    IsSuccess = true,
+                    Message = "Email de confirmación enviado. Revisa tu bandeja de entrada."
+                });
+            }
+            catch (Exception ex)
+            {
+                // Log el error pero no revelar detalles al usuario
+                Console.WriteLine($"Error al enviar email: {ex.Message}");
+                return StatusCode(500, new AuthResponseDto
+                {
+                    IsSuccess = false,
+                    Message = "Error al enviar el email. Por favor intenta más tarde."
+                });
+            }
+        }
+
+        // ✅ api/account/confirm-email-direct (Confirmar email directamente desde el botón)
+        [AllowAnonymous]
+        [HttpPost("confirm-email-direct")]
+        public async Task<ActionResult<AuthResponseDto>> ConfirmEmailDirect([FromBody] ConfirmEmailDto confirmEmailDto)
+        {
+            if (string.IsNullOrWhiteSpace(confirmEmailDto.Email) || string.IsNullOrWhiteSpace(confirmEmailDto.Token))
+            {
+                return BadRequest(new AuthResponseDto
+                {
+                    IsSuccess = false,
+                    Message = "Email y token son requeridos"
+                });
+            }
+
+            var user = await _userManager.FindByEmailAsync(confirmEmailDto.Email);
+            if (user == null)
+            {
+                return NotFound(new AuthResponseDto
+                {
+                    IsSuccess = false,
+                    Message = "Usuario no encontrado"
+                });
+            }
+
+            if (user.EmailConfirmed)
+            {
+                return Ok(new AuthResponseDto
+                {
+                    IsSuccess = true,
+                    Message = "El email ya ha sido confirmado anteriormente"
+                });
+            }
+
+            var result = await _userManager.ConfirmEmailAsync(user, confirmEmailDto.Token);
+
+            if (!result.Succeeded)
+            {
+                return BadRequest(new AuthResponseDto
+                {
+                    IsSuccess = false,
+                    Message = "Error al confirmar el email. El token puede haber expirado."
+                });
+            }
+
+            return Ok(new AuthResponseDto
+            {
+                IsSuccess = true,
+                Message = "✅ Email confirmado exitosamente. Ya puedes iniciar sesión."
             });
         }
     }

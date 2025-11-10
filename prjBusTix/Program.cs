@@ -1,4 +1,5 @@
 using System.Text;
+using Hangfire;
 using prjBusTix.Data;
 using prjBusTix.Model;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -59,6 +60,23 @@ builder.Services.AddDbContext<AppDbContext>(options =>
             maxRetryDelay: TimeSpan.FromSeconds(30),
             errorNumbersToAdd: null);
     }));
+
+// Configurar Hangfire para tareas en segundo plano
+builder.Services.AddHangfire(configuration => configuration
+    .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
+    .UseSimpleAssemblyNameTypeSerializer()
+    .UseRecommendedSerializerSettings()
+    .UseSqlServerStorage(connectionString, new Hangfire.SqlServer.SqlServerStorageOptions
+    {
+        CommandBatchMaxTimeout = TimeSpan.FromMinutes(5),
+        SlidingInvisibilityTimeout = TimeSpan.FromMinutes(5),
+        QueuePollInterval = TimeSpan.Zero,
+        UseRecommendedIsolationLevel = true,
+        DisableGlobalLocks = true
+    }));
+
+// Agregar servidor de Hangfire
+builder.Services.AddHangfireServer();
 
 builder.Services.AddIdentity<ClApplicationUser, IdentityRole>(options =>
 {
@@ -146,6 +164,15 @@ builder.Services.AddAuthorization();
 builder.Services.AddSingleton<Microsoft.AspNetCore.Authorization.IAuthorizationPolicyProvider, prjBusTix.Security.PermissionPolicyProvider>();
 builder.Services.AddScoped<Microsoft.AspNetCore.Authorization.IAuthorizationHandler, prjBusTix.Security.PermissionHandler>();
 
+// Registrar servicios de aplicación
+builder.Services.AddScoped<prjBusTix.Services.INotificacionService, prjBusTix.Services.NotificacionService>();
+builder.Services.AddScoped<prjBusTix.Services.HangfireJobsService>();
+builder.Services.AddScoped<prjBusTix.Services.IAuditoriaService, prjBusTix.Services.AuditoriaService>();
+builder.Services.AddHttpContextAccessor(); // Necesario para auditoría
+
+// Configurar SignalR para notificaciones en tiempo real
+builder.Services.AddSignalR();
+
 var app = builder.Build();
 
 // Inicializar base de datos y roles
@@ -211,6 +238,7 @@ if (app.Environment.IsDevelopment())
 {
     //app.MapOpenApi();
     app.UseSwagger();
+    
     app.UseSwaggerUI(c =>
     {
         c.SwaggerEndpoint("/swagger/v1/swagger.json", "AuthAPI v1");
@@ -228,10 +256,28 @@ app.UseAuthentication();
 
 app.UseAuthorization();
 
+// Dashboard de Hangfire (solo accesible por Admin)
+app.UseHangfireDashboard("/hangfire", new DashboardOptions
+{
+    Authorization = new[] { new prjBusTix.Security.HangfireAuthorizationFilter() },
+    DashboardTitle = "BusTix - Jobs en Segundo Plano"
+});
+
+// Configurar jobs recurrentes de Hangfire
+using (var scope = app.Services.CreateScope())
+{
+    var hangfireService = scope.ServiceProvider.GetRequiredService<prjBusTix.Services.HangfireJobsService>();
+    hangfireService.ConfigurarTrabajosRecurrentes();
+}
+
+// Mapear el Hub de SignalR para notificaciones en tiempo real
+app.MapHub<prjBusTix.Hubs.NotificacionesHub>("/hubs/notificaciones");
+
 app.MapControllers();
 
 app.Run();
 
 
-//wzzf edxj cnjy ozdk
+//usam kbex hkxx sudh
+
 //gnmiolwrxf115661

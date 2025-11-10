@@ -17,9 +17,9 @@ namespace prjBusTix.Security
             _fallbackPolicyProvider = new DefaultAuthorizationPolicyProvider(options);
         }
 
-        public Task<AuthorizationPolicy?> GetDefaultPolicyAsync()
+        public Task<AuthorizationPolicy> GetDefaultPolicyAsync()
         {
-            return _fallbackPolicyProvider.GetDefaultPolicyAsync();
+            return _fallbackPolicyProvider.GetDefaultPolicyAsync()!;
         }
 
         public Task<AuthorizationPolicy?> GetFallbackPolicyAsync()
