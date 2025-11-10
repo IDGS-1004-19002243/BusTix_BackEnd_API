@@ -1,0 +1,6 @@
+@prjBusTix_HostAddress = http://localhost:5289
+
+GET {{prjBusTix_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
