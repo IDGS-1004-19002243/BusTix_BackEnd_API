@@ -1,4 +1,4 @@
-﻿using System.ComponentModel.DataAnnotations;
+﻿﻿using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace prjBusTix.Model
@@ -22,6 +22,22 @@ namespace prjBusTix.Model
         
         [MaxLength(50)]
         public string? ResultadoValidacion { get; set; } // Exitosa, Duplicada, Invalida
+        
+        [MaxLength(50)]
+        public string? TipoValidacion { get; set; } // EscaneoQR, Manual
+        
+        public decimal? EstacionLat { get; set; }
+        
+        public decimal? EstacionLong { get; set; }
+        
+        [MaxLength(1000)]
+        public string? Observaciones { get; set; }
+        
+        /// <summary>
+        /// ID único generado por el dispositivo para idempotencia
+        /// </summary>
+        [MaxLength(50)]
+        public string? DeviceValidationId { get; set; }
         
         public DateTime FechaHoraValidacion { get; set; } = DateTime.Now;
         

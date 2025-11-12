@@ -93,6 +93,20 @@ public class PagosController : ControllerBase
                     // Actualizar viaje
                     boleto.Viaje.AsientosVendidos++;
                     
+                    // Incrementar uso de cupón si aplica
+                    if (boleto.CuponAplicadoID.HasValue)
+                    {
+                        var cupon = await _context.Cupones.FirstOrDefaultAsync(c => c.CuponID == boleto.CuponAplicadoID.Value);
+                        if (cupon != null)
+                        {
+                            cupon.UsosRealizados++;
+                            if (cupon.UsosMaximos.HasValue && cupon.UsosRealizados >= cupon.UsosMaximos.Value)
+                            {
+                                cupon.EsActivo = false;
+                            }
+                        }
+                    }
+                    
                     // Crear entrada en ManifiestoPasajeros automáticamente
                     var manifiesto = new ManifiestoPasajero
                     {

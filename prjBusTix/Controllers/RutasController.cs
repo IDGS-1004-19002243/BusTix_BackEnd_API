@@ -132,12 +132,25 @@ public class RutasController : ControllerBase
         {
             var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
 
+            // Normalizar código
+            dto.CodigoRuta = dto.CodigoRuta.Trim().ToUpper();
+
             // Validar que no exista otra ruta con el mismo código
             var existeCodigo = await _context.PlantillasRutas
                 .AnyAsync(r => r.CodigoRuta == dto.CodigoRuta);
 
             if (existeCodigo)
                 return BadRequest(new { message = "Ya existe una ruta con ese código" });
+
+            // Validar paradas (si existen): orden único y positivo
+            if (dto.Paradas != null && dto.Paradas.Any())
+            {
+                var ordenes = dto.Paradas.Select(p => p.OrdenParada).ToList();
+                if (ordenes.Any(o => o <= 0))
+                    return BadRequest(new { message = "El orden de las paradas debe ser un entero positivo" });
+                if (ordenes.Distinct().Count() != ordenes.Count)
+                    return BadRequest(new { message = "El orden de las paradas no puede contener duplicados" });
+            }
 
             var ruta = new PlantillaRuta
             {
@@ -325,4 +338,3 @@ public class RutasController : ControllerBase
         }
     }
 }
-

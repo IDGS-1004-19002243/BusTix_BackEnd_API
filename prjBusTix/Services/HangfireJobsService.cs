@@ -1,7 +1,7 @@
 ﻿using Hangfire;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using prjBusTix.Data;
-using prjBusTix.Model;
 
 namespace prjBusTix.Services;
 
@@ -28,19 +28,12 @@ public class HangfireJobsService
     {
         _logger.LogInformation("Configurando trabajos recurrentes de Hangfire...");
 
-        // Trabajo recurrente: Enviar recordatorios de viajes (cada hora)
+        // Solo recordatorios de viajes
         RecurringJob.AddOrUpdate(
             "enviar-recordatorios-viajes",
             () => EnviarRecordatoriosViajesAsync(),
             Cron.Hourly);
 
-        // Trabajo recurrente: Limpiar notificaciones antiguas (diario a las 2 AM)
-        RecurringJob.AddOrUpdate(
-            "limpiar-notificaciones-antiguas",
-            () => LimpiarNotificacionesAntiguasAsync(),
-            Cron.Daily(2));
-
-        // Trabajo recurrente: Verificar viajes próximos y enviar recordatorios (cada 30 min)
         RecurringJob.AddOrUpdate(
             "verificar-viajes-proximos",
             () => VerificarViajesProximosAsync(),
@@ -92,16 +85,22 @@ public class HangfireJobsService
             {
                 var horasHastaSalida = (viaje.FechaSalida - ahora).TotalHours;
 
-                // Enviar recordatorio de 24 horas
+                // 24 horas (ventana 24..23]
                 if (horasHastaSalida <= 24 && horasHastaSalida > 23)
                 {
                     await notifService.EnviarRecordatorioViajeAsync(viaje.ViajeID, 24);
                     recordatoriosEnviados++;
                 }
-                // Enviar recordatorio de 4 horas
+                // 4 horas (ventana 4..3]
                 else if (horasHastaSalida <= 4 && horasHastaSalida > 3)
                 {
                     await notifService.EnviarRecordatorioViajeAsync(viaje.ViajeID, 4);
+                    recordatoriosEnviados++;
+                }
+                // 2 horas (ventana 2..1]
+                else if (horasHastaSalida <= 2 && horasHastaSalida > 1)
+                {
+                    await notifService.EnviarRecordatorioViajeAsync(viaje.ViajeID, 2);
                     recordatoriosEnviados++;
                 }
             }
@@ -165,7 +164,7 @@ public class HangfireJobsService
             {
                 var horasHastaSalida = (viaje.FechaSalida - ahora).TotalHours;
 
-                // Programar recordatorio de 24 horas si aún no se ha enviado
+                // Programar recordatorio de 24 horas (ventana 25..24]
                 if (horasHastaSalida > 24 && horasHastaSalida <= 25)
                 {
                     var fechaEnvio = viaje.FechaSalida.AddHours(-24);
@@ -173,11 +172,19 @@ public class HangfireJobsService
                     viajesProgramados++;
                 }
 
-                // Programar recordatorio de 4 horas si aún no se ha enviado
+                // Programar recordatorio de 4 horas (ventana 5..4]
                 if (horasHastaSalida > 4 && horasHastaSalida <= 5)
                 {
                     var fechaEnvio = viaje.FechaSalida.AddHours(-4);
                     ProgramarRecordatorioViaje(viaje.ViajeID, fechaEnvio, 4);
+                    viajesProgramados++;
+                }
+
+                // Programar recordatorio de 2 horas (ventana 3..2]
+                if (horasHastaSalida > 2 && horasHastaSalida <= 3)
+                {
+                    var fechaEnvio = viaje.FechaSalida.AddHours(-2);
+                    ProgramarRecordatorioViaje(viaje.ViajeID, fechaEnvio, 2);
                     viajesProgramados++;
                 }
             }
@@ -189,39 +196,6 @@ public class HangfireJobsService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error al verificar viajes próximos");
-        }
-    }
-
-    /// <summary>
-    /// Limpia notificaciones leídas de más de 30 días
-    /// Se ejecuta diariamente a las 2 AM
-    /// </summary>
-    public async Task LimpiarNotificacionesAntiguasAsync()
-    {
-        try
-        {
-            using var scope = _serviceProvider.CreateScope();
-            var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-
-            var hace30Dias = DateTime.Now.AddDays(-30);
-
-            var notificacionesAntiguas = await context.Notificaciones
-                .Where(n => n.FueLeida && n.FechaLectura < hace30Dias)
-                .ToListAsync();
-
-            if (notificacionesAntiguas.Any())
-            {
-                context.Notificaciones.RemoveRange(notificacionesAntiguas);
-                await context.SaveChangesAsync();
-
-                _logger.LogInformation(
-                    "Limpieza de notificaciones completada. {Count} notificaciones eliminadas",
-                    notificacionesAntiguas.Count);
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error al limpiar notificaciones antiguas");
         }
     }
 }

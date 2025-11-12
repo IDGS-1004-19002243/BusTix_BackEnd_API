@@ -216,10 +216,42 @@ public class ViajesController : ControllerBase
             {
                 var chofer = await _context.Users.FindAsync(dto.ChoferID);
                 if (chofer == null || chofer.Estatus != 1)
-                    return BadRequest(new { message = "El chofer especificado no existe o no est� activo" });
+                    return BadRequest(new { message = "El chofer especificado no existe o no está activo" });
             }
 
-            // Generar c�digo �nico de viaje
+            // Calcular ventana de tiempo del nuevo viaje
+            var minutosFallback = (plantillaRuta.TiempoEstimadoMinutos ?? 240);
+            var nuevoInicio = dto.FechaSalida;
+            var nuevoFin = dto.FechaLlegadaEstimada ?? dto.FechaSalida.AddMinutes(minutosFallback);
+
+            // Conflicto de agenda - Unidad
+            if (dto.UnidadID.HasValue)
+            {
+                var conflictoUnidad = await _context.Viajes.AnyAsync(v =>
+                    v.UnidadID == dto.UnidadID.Value && v.Estatus != 3 &&
+                    v.ViajeID != 0 && // placeholder, no aplica para creación
+                    v.FechaSalida <= nuevoFin &&
+                    (v.FechaLlegadaEstimada ?? v.FechaSalida.AddMinutes(240)) >= nuevoInicio);
+                if (conflictoUnidad)
+                {
+                    return BadRequest(new { message = "La unidad seleccionada tiene un conflicto de agenda en ese horario" });
+                }
+            }
+
+            // Conflicto de agenda - Chofer
+            if (!string.IsNullOrEmpty(dto.ChoferID))
+            {
+                var conflictoChofer = await _context.Viajes.AnyAsync(v =>
+                    v.ChoferID == dto.ChoferID && v.Estatus != 3 &&
+                    v.FechaSalida <= nuevoFin &&
+                    (v.FechaLlegadaEstimada ?? v.FechaSalida.AddMinutes(240)) >= nuevoInicio);
+                if (conflictoChofer)
+                {
+                    return BadRequest(new { message = "El chofer seleccionado tiene un conflicto de agenda en ese horario" });
+                }
+            }
+
+            // Generar código único de viaje
             var codigoViaje = $"V{DateTime.Now:yyyyMMddHHmmss}";
 
             var viaje = new Viaje
@@ -517,38 +549,71 @@ public class ViajesController : ControllerBase
     /// </summary>
     [HttpGet("{id}/manifiesto")]
     [ClRequirePermission(ClAppPermissions.ViajesView)]
-    public async Task<ActionResult> GetManifiestoViaje(int id)
+    public async Task<ActionResult<ManifiestoResponseDto>> GetManifiesto(int id)
     {
         try
         {
-            var viaje = await _context.Viajes.FindAsync(id);
+            var viaje = await _context.Viajes
+                .Include(v => v.EstatusNavigation)
+                .FirstOrDefaultAsync(v => v.ViajeID == id);
+            
             if (viaje == null)
                 return NotFound(new { message = "Viaje no encontrado" });
-
-            var manifiesto = await _context.ManifiestoPasajeros
-                .Include(m => m.Boleto)
-                    .ThenInclude(b => b.Cliente)
-                .Include(m => m.Boleto)
-                    .ThenInclude(b => b.ParadaAbordaje)
-                .Where(m => m.ViajeID == id)
-                .OrderBy(m => m.Boleto.NumeroAsiento)
-                .Select(m => new
-                {
-                    m.ManifiestoID,
-                    m.BoletoID,
-                    m.Boleto.CodigoBoleto,
-                    m.Boleto.NombrePasajero,
-                    m.Boleto.EmailPasajero,
-                    m.Boleto.TelefonoPasajero,
-                    m.Boleto.NumeroAsiento,
-                    ParadaAbordaje = m.Boleto.ParadaAbordaje != null ? m.Boleto.ParadaAbordaje.NombreParada : null,
-                    EstatusAbordaje = m.EstatusAbordaje,
-                    FechaAbordaje = m.FechaAbordaje,
-                    FueValidado = m.FueValidado
-                })
+            
+            // Obtener todos los boletos pagados del viaje con información del cliente
+            var boletos = await _context.Boletos
+                .Include(b => b.Cliente)
+                .Include(b => b.ManifiestoPasajero)
+                .Include(b => b.ParadaAbordaje)
+                .Where(b => b.ViajeID == id && b.Estatus == 10) // Solo boletos pagados
+                .OrderBy(b => b.NumeroAsiento)
                 .ToListAsync();
-
-            return Ok(manifiesto);
+            
+            // Contar estados de abordaje
+            int totalPasajeros = boletos.Count;
+            int abordados = boletos.Count(b => b.ManifiestoPasajero != null && 
+                                              b.ManifiestoPasajero.EstatusAbordaje == 22); // ABD_ABORDADO
+            int noAsistieron = boletos.Count(b => b.ManifiestoPasajero != null && 
+                                                  b.ManifiestoPasajero.EstatusAbordaje == 23); // ABD_NO_ASISTIO
+            int pendientes = totalPasajeros - abordados - noAsistieron;
+            
+            var pasajeros = boletos.Select(b => new PasajeroManifiestoDto
+            {
+                BoletoID = b.BoletoID,
+                CodigoQR = b.CodigoQR,
+                ClienteID = b.ClienteID,
+                ClienteNombre = b.NombrePasajero ?? b.Cliente?.NombreCompleto ?? "Sin nombre",
+                ClienteEmail = b.EmailPasajero ?? b.Cliente?.Email,
+                ClienteTelefono = b.TelefonoPasajero ?? b.Cliente?.PhoneNumber,
+                AsientoAsignado = b.NumeroAsiento,
+                EstadoBoleto = b.Estatus == 10 ? "Pagado" : (b.Estatus == 11 ? "Usado" : "Otro"),
+                EstadoAbordaje = b.ManifiestoPasajero?.EstatusAbordaje switch
+                {
+                    22 => "Abordado",
+                    23 => "No Asistió",
+                    _ => "Pendiente"
+                },
+                FechaValidacion = b.FechaValidacion,
+                ValidadoPor = b.ManifiestoPasajero?.ValidadoPor
+            }).ToList();
+            
+            var response = new ManifiestoResponseDto
+            {
+                ViajeID = viaje.ViajeID,
+                CodigoViaje = viaje.CodigoViaje,
+                FechaSalida = viaje.FechaSalida,
+                TotalPasajeros = totalPasajeros,
+                PasajerosAbordados = abordados,
+                PasajerosPendientes = pendientes,
+                PasajerosNoAsistieron = noAsistieron,
+                Pasajeros = pasajeros
+            };
+            
+            _logger.LogInformation(
+                "Manifiesto generado para viaje {ViajeID}: {Total} pasajeros", 
+                id, totalPasajeros);
+            
+            return Ok(response);
         }
         catch (Exception ex)
         {
@@ -778,6 +843,146 @@ public class ViajesController : ControllerBase
             _logger.LogError(ex, "Error al obtener viajes del staff");
             return StatusCode(500, new { message = "Error al obtener viajes", error = ex.Message });
         }
+    }
+    
+    /// <summary>
+    /// Verificar disponibilidad de unidad, chofer o staff
+    /// GET /api/viajes/verificar-disponibilidad
+    /// </summary>
+    [HttpGet("verificar-disponibilidad")]
+    [ClRequirePermission(ClAppPermissions.ViajesView)]
+    public async Task<ActionResult<DisponibilidadResponseDto>> VerificarDisponibilidad(
+        [FromQuery] DateTime fechaInicio,
+        [FromQuery] DateTime? fechaFin,
+        [FromQuery] int? unidadId,
+        [FromQuery] string? choferId,
+        [FromQuery] string? staffId)
+    {
+        if (fechaInicio == default)
+            return BadRequest(new { message = "fechaInicio es requerido" });
+        var fin = fechaFin ?? fechaInicio.AddHours(4);
+
+        if (unidadId.HasValue)
+        {
+            var unidad = await _context.Unidades.FindAsync(unidadId.Value);
+            if (unidad == null || unidad.Estatus != 1)
+                return BadRequest(new { message = "Unidad no existe o no está activa" });
+            var r = await ValidarDisponibilidadUnidad(unidadId.Value, fechaInicio, fin);
+            return Ok(r);
+        }
+        if (!string.IsNullOrEmpty(choferId))
+        {
+            var chofer = await _context.Users.FindAsync(choferId);
+            if (chofer == null || chofer.Estatus != 1)
+                return BadRequest(new { message = "Chofer no existe o no está activo" });
+            var r = await ValidarDisponibilidadChofer(choferId, fechaInicio, fin);
+            return Ok(r);
+        }
+        if (!string.IsNullOrEmpty(staffId))
+        {
+            var staff = await _context.Users.FindAsync(staffId);
+            if (staff == null || staff.Estatus != 1)
+                return BadRequest(new { message = "Staff no existe o no está activo" });
+            var r = await ValidarDisponibilidadStaff(staffId, fechaInicio, fin);
+            return Ok(r);
+        }
+        return BadRequest(new { message = "Debe especificar unidadId, choferId o staffId" });
+    }
+    
+    // ===== MÉTODOS PRIVADOS AUXILIARES =====
+    
+    private async Task<DisponibilidadResponseDto> ValidarDisponibilidadChofer(string choferId, DateTime desde, DateTime hasta)
+    {
+        var conflictos = await _context.Viajes
+            .Include(v => v.Evento)
+            .Include(v => v.PlantillaRuta)
+            .Where(v => v.ChoferID == choferId &&
+                       ((v.FechaSalida >= desde && v.FechaSalida <= hasta) ||
+                        (v.FechaLlegadaEstimada.HasValue && v.FechaLlegadaEstimada.Value >= desde && v.FechaLlegadaEstimada.Value <= hasta) ||
+                        (v.FechaSalida <= desde && v.FechaLlegadaEstimada.HasValue && v.FechaLlegadaEstimada.Value >= hasta)))
+            .Select(v => new ConflictoDto
+            {
+                ViajeID = v.ViajeID,
+                CodigoViaje = v.CodigoViaje,
+                FechaSalida = v.FechaSalida,
+                FechaLlegadaEstimada = v.FechaLlegadaEstimada,
+                EventoNombre = v.Evento.Nombre,
+                RutaNombre = v.PlantillaRuta.NombreRuta
+            })
+            .ToListAsync();
+        
+        return new DisponibilidadResponseDto
+        {
+            EstaDisponible = !conflictos.Any(),
+            Mensaje = conflictos.Any() 
+                ? $"El chofer tiene {conflictos.Count} conflicto(s) de horario" 
+                : "El chofer está disponible",
+            Conflictos = conflictos
+        };
+    }
+    
+    private async Task<DisponibilidadResponseDto> ValidarDisponibilidadUnidad(int unidadId, DateTime desde, DateTime hasta)
+    {
+        var conflictos = await _context.Viajes
+            .Include(v => v.Evento)
+            .Include(v => v.PlantillaRuta)
+            .Where(v => v.UnidadID == unidadId &&
+                       ((v.FechaSalida >= desde && v.FechaSalida <= hasta) ||
+                        (v.FechaLlegadaEstimada.HasValue && v.FechaLlegadaEstimada.Value >= desde && v.FechaLlegadaEstimada.Value <= hasta) ||
+                        (v.FechaSalida <= desde && v.FechaLlegadaEstimada.HasValue && v.FechaLlegadaEstimada.Value >= hasta)))
+            .Select(v => new ConflictoDto
+            {
+                ViajeID = v.ViajeID,
+                CodigoViaje = v.CodigoViaje,
+                FechaSalida = v.FechaSalida,
+                FechaLlegadaEstimada = v.FechaLlegadaEstimada,
+                EventoNombre = v.Evento.Nombre,
+                RutaNombre = v.PlantillaRuta.NombreRuta
+            })
+            .ToListAsync();
+        
+        return new DisponibilidadResponseDto
+        {
+            EstaDisponible = !conflictos.Any(),
+            Mensaje = conflictos.Any() 
+                ? $"La unidad tiene {conflictos.Count} conflicto(s) de horario" 
+                : "La unidad está disponible",
+            Conflictos = conflictos
+        };
+    }
+    
+    private async Task<DisponibilidadResponseDto> ValidarDisponibilidadStaff(string staffId, DateTime desde, DateTime? hasta)
+    {
+        var hastaDate = hasta ?? desde.AddDays(1);
+        
+        var conflictos = await _context.ViajesStaff
+            .Include(vs => vs.Viaje)
+                .ThenInclude(v => v.Evento)
+            .Include(vs => vs.Viaje)
+                .ThenInclude(v => v.PlantillaRuta)
+            .Where(vs => vs.StaffID == staffId &&
+                        ((vs.Viaje.FechaSalida >= desde && vs.Viaje.FechaSalida <= hastaDate) ||
+                         (vs.Viaje.FechaLlegadaEstimada.HasValue && vs.Viaje.FechaLlegadaEstimada.Value >= desde && vs.Viaje.FechaLlegadaEstimada.Value <= hastaDate) ||
+                         (vs.Viaje.FechaSalida <= desde && vs.Viaje.FechaLlegadaEstimada.HasValue && vs.Viaje.FechaLlegadaEstimada.Value >= hastaDate)))
+            .Select(vs => new ConflictoDto
+            {
+                ViajeID = vs.Viaje.ViajeID,
+                CodigoViaje = vs.Viaje.CodigoViaje,
+                FechaSalida = vs.Viaje.FechaSalida,
+                FechaLlegadaEstimada = vs.Viaje.FechaLlegadaEstimada,
+                EventoNombre = vs.Viaje.Evento.Nombre,
+                RutaNombre = vs.Viaje.PlantillaRuta.NombreRuta
+            })
+            .ToListAsync();
+        
+        return new DisponibilidadResponseDto
+        {
+            EstaDisponible = !conflictos.Any(),
+            Mensaje = conflictos.Any() 
+                ? $"El staff tiene {conflictos.Count} conflicto(s) de horario" 
+                : "El staff está disponible",
+            Conflictos = conflictos
+        };
     }
 }
 

@@ -1025,10 +1025,22 @@ namespace prjBusTix.Migrations
                     b.Property<int>("BoletoID")
                         .HasColumnType("int");
 
+                    b.Property<decimal?>("CheckInLat")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal?>("CheckInLong")
+                        .HasColumnType("decimal(18,2)");
+
                     b.Property<int>("EstatusAbordaje")
                         .HasColumnType("int");
 
+                    b.Property<int?>("EstatusCheckIn")
+                        .HasColumnType("int");
+
                     b.Property<DateTime?>("FechaAbordaje")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("FechaCheckIn")
                         .HasColumnType("datetime2");
 
                     b.Property<DateTime?>("FechaValidacion")
@@ -1045,6 +1057,10 @@ namespace prjBusTix.Migrations
                     b.Property<string>("NumeroAsiento")
                         .HasMaxLength(10)
                         .HasColumnType("nvarchar(10)");
+
+                    b.Property<string>("ObservacionesCheckIn")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
 
                     b.Property<int?>("ParadaAbordajeID")
                         .HasColumnType("int");
@@ -1407,6 +1423,16 @@ namespace prjBusTix.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
 
+                    b.Property<string>("DeviceValidationId")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<decimal?>("EstacionLat")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal?>("EstacionLong")
+                        .HasColumnType("decimal(18,2)");
+
                     b.Property<DateTime>("FechaHoraValidacion")
                         .HasColumnType("datetime2");
 
@@ -1416,7 +1442,15 @@ namespace prjBusTix.Migrations
                     b.Property<bool>("ModoOffline")
                         .HasColumnType("bit");
 
+                    b.Property<string>("Observaciones")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
                     b.Property<string>("ResultadoValidacion")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("TipoValidacion")
                         .HasMaxLength(50)
                         .HasColumnType("nvarchar(50)");
 

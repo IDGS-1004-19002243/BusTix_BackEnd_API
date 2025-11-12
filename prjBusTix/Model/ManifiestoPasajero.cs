@@ -1,4 +1,4 @@
-﻿using System.ComponentModel.DataAnnotations;
+﻿﻿using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace prjBusTix.Model
@@ -32,6 +32,18 @@ namespace prjBusTix.Model
         
         [MaxLength(450)]
         public string? ValidadoPor { get; set; }
+        
+        // Campos de check-in
+        public DateTime? FechaCheckIn { get; set; }
+        
+        public int? EstatusCheckIn { get; set; }
+        
+        public decimal? CheckInLat { get; set; }
+        
+        public decimal? CheckInLong { get; set; }
+        
+        [MaxLength(1000)]
+        public string? ObservacionesCheckIn { get; set; }
         
         // Relaciones
         [ForeignKey(nameof(ViajeID))]
