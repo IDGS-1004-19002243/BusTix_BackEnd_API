@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using prjBusTix.Data;
 using prjBusTix.Dto.Viajes;
+using prjBusTix.Dto.ViajeStaff;
 using prjBusTix.Model;
 using prjBusTix.Security;
 using System.Security.Claims;
@@ -562,7 +563,7 @@ public class ViajesController : ControllerBase
     /// </summary>
     [HttpPost("{id}/staff")]
     [ClRequirePermission(ClAppPermissions.ViajesUpdate)]
-    public async Task<ActionResult<StaffViajeResponseDto>> AsignarStaff(int id, [FromBody] AsignarStaffDto dto)
+    public async Task<ActionResult<StaffViajeResponseDto>> AsignarStaff(int id, [FromBody] AsignarStaffViajeDto dto)
     {
         try
         {

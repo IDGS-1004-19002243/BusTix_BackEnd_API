@@ -36,6 +36,13 @@ ScaffoldingReadMe.txt
 # NuGet Symbol Packages
 *.snupkg
 
+# Ignorar archivos de Visual Studio
+.vs/
+
+# Archivos binarios y de compilación
+[Bb]in/
+[Oo]bj/
+
 # Others
 ~$*
 *~
