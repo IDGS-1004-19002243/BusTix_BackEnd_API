@@ -12,6 +12,7 @@
 
         // ===== VIAJES =====
         public const string ViajesView = "viajes:view";
+        public const string ViajesRead = "viajes:read";
         public const string ViajesCreate = "viajes:create";
         public const string ViajesUpdate = "viajes:update";
         public const string ViajesDelete = "viajes:delete";
@@ -64,6 +65,10 @@
         // ===== AUDITORÍA =====
         public const string AuditoriaView = "auditoria:view";
 
+        // ===== REPORTES =====
+        public const string ReportesRead = "reportes:read";
+        public const string ReportesView = "reportes:view";
+
         // ===== MAPEO DE ROLES A PERMISOS =====
         public static readonly Dictionary<string, string[]> RolePermissions = new()
         {
@@ -83,7 +88,8 @@
                 UnidadesView, UnidadesCreate, UnidadesUpdate, UnidadesDelete,
                 UsersView, UsersCreate, UsersUpdate, UsersDelete,
                 RolesView, RolesCreate, RolesUpdate, RolesDelete, RolesAssignPermissions, RolesAssignUsers,
-                AuditoriaView
+                AuditoriaView,
+                ReportesRead
             },
 
             // COORDINADOR - Gestión operativa
@@ -97,7 +103,8 @@
                 NotificacionesView, NotificacionesCreate, NotificacionesBroadcast,
                 RutasView,
                 UnidadesView,
-                UsersView
+                UsersView,
+                ReportesRead
             },
 
             // STAFF - Personal operativo
