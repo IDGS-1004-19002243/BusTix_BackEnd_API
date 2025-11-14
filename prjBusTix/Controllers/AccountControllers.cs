@@ -119,7 +119,7 @@ namespace prjBusTix.Controllers
                         <h1 style='color: white; margin: 0;'>🚌 BusTix</h1>
                     </div>
                     <div style='padding: 30px; background-color: #f8f9fa;'>
-                        <h2 style='color: #333;'>¡Bienvenido {user.NombreCompleto ?? "Usuario"}!</h2>
+                        <h2 style='color: #333;'>¡Bienvenido {user.NombreCompleto}!</h2>
                         <p style='color: #666; font-size: 16px; line-height: 1.6;'>
                             Tu cuenta ha sido creada exitosamente. Para completar tu registro,
                             por favor confirma tu dirección de email haciendo clic en el siguiente botón:
@@ -315,7 +315,7 @@ namespace prjBusTix.Controllers
 
             var htmlBody = $@"
         <div style='font-family: Arial, sans-serif; color: #333;'>
-            <h2>Hola {user.NombreCompleto ?? "Usuario"},</h2>
+            <h2>Hola {user.NombreCompleto},</h2>
             <p>Recibimos una solicitud para restablecer tu contraseña.</p>
             <p>
                 <a href='{resetLink}' style='
@@ -838,6 +838,7 @@ namespace prjBusTix.Controllers
                     PhoneNumber = user.PhoneNumber,
                     PhoneNumberConfirmed = user.PhoneNumberConfirmed,
                     AccessFailedCount = user.AccessFailedCount,
+                    // Campos adicionales
                     Estatus = user.Estatus,
                     EstatusNombre = estatusNombre,
                     FechaRegistro = user.FechaRegistro,
@@ -917,9 +918,9 @@ namespace prjBusTix.Controllers
 
                 statusDetails.Add(new
                 {
-                    EstatusId = stat.EstatusId,
+                    stat.EstatusId,
                     EstatusNombre = estatusNombre,
-                    Count = stat.Count,
+                    stat.Count,
                     Percentage = totalUsers > 0 ? Math.Round((double)stat.Count / totalUsers * 100, 2) : 0
                 });
             }
@@ -1075,9 +1076,9 @@ namespace prjBusTix.Controllers
 
                     lockedUsers.Add(new
                     {
-                        UserId = user.Id,
-                        Email = user.Email,
-                        NombreCompleto = user.NombreCompleto,
+                        user.Id,
+                        user.Email,
+                        user.NombreCompleto,
                         Roles = roles,
                         FailedAttempts = failedAttempts,
                         LockoutEnd = lockoutEnd,
@@ -1152,9 +1153,9 @@ namespace prjBusTix.Controllers
                     var roles = await _userManager.GetRolesAsync(user);
                     usersAtRisk.Add(new
                     {
-                        UserId = user.Id,
-                        Email = user.Email,
-                        NombreCompleto = user.NombreCompleto,
+                        user.Id,
+                        user.Email,
+                        user.NombreCompleto,
                         Roles = roles,
                         FailedAttempts = failedAttempts,
                         RemainingAttempts = Math.Max(0, maxAttempts - failedAttempts)
@@ -1374,7 +1375,7 @@ namespace prjBusTix.Controllers
                         <h1 style='color: white; margin: 0;'>🚌 BusTix</h1>
                     </div>
                     <div style='padding: 30px; background-color: #f8f9fa;'>
-                        <h2 style='color: #333;'>¡Hola {user.NombreCompleto ?? "Usuario"}!</h2>
+                        <h2 style='color: #333;'>¡Hola {user.NombreCompleto}!</h2>
                         <p style='color: #666; font-size: 16px; line-height: 1.6;'>
                             Gracias por registrarte en BusTix. Para completar tu registro y poder acceder a tu cuenta,
                             por favor confirma tu dirección de email haciendo clic en el siguiente botón:
@@ -1480,6 +1481,136 @@ namespace prjBusTix.Controllers
                 IsSuccess = true,
                 Message = "✅ Email confirmado exitosamente. Ya puedes iniciar sesión."
             });
+        }
+
+        // NUEVO: api/account/admin/confirm-email -> Permite a un administrador confirmar el email de un usuario sin token
+        // Uso pensado: administradores que verifican cuentas manualmente.
+        [Authorize(Roles = "Admin")]
+        [HttpPost("admin/confirm-email")]
+        public async Task<ActionResult<AuthResponseDto>> AdminConfirmEmail([FromBody] AdminConfirmEmailDto dto)
+        {
+            if (dto == null || string.IsNullOrWhiteSpace(dto.Email))
+            {
+                return BadRequest(new AuthResponseDto { IsSuccess = false, Message = "Email es requerido" });
+            }
+
+            var user = await _userManager.FindByEmailAsync(dto.Email);
+            if (user == null)
+            {
+                return NotFound(new AuthResponseDto { IsSuccess = false, Message = "Usuario no encontrado" });
+            }
+
+            if (user.EmailConfirmed)
+            {
+                return Ok(new AuthResponseDto { IsSuccess = true, Message = "El email ya estaba confirmado" });
+            }
+
+            // Marcar como confirmado sin token
+            user.EmailConfirmed = true;
+            var updateResult = await _userManager.UpdateAsync(user);
+            if (!updateResult.Succeeded)
+            {
+                return StatusCode(500, new AuthResponseDto { IsSuccess = false, Message = "No se pudo confirmar el email (error al actualizar usuario)" });
+            }
+
+            // (Opcional) registrar auditoría mínima
+            try
+            {
+                var appDb = HttpContext.RequestServices.GetRequiredService<Data.AppDbContext>();
+                await appDb.AuditoriaCambios.AddAsync(new Model.AuditoriaCambio
+                {
+                    TablaAfectada = "AspNetUsers",
+                    RegistroID = user.Id,
+                    TipoOperacion = "CONFIRM_EMAIL_BY_ADMIN",
+                    UsuarioID = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? string.Empty,
+                    ValoresAnteriores = "{ \"EmailConfirmed\": false }",
+                    ValoresNuevos = "{ \"EmailConfirmed\": true }",
+                    FechaHoraCambio = DateTime.UtcNow
+                });
+                await appDb.SaveChangesAsync();
+            }
+            catch
+            {
+                // No es crítico si falla la auditoría; no bloquear la operación principal
+            }
+
+            return Ok(new AuthResponseDto { IsSuccess = true, Message = "Email confirmado por administrador" });
+        }
+
+        // NUEVO: api/account/admin/resend-confirmation -> Permite al admin reenviar el correo de confirmación a un usuario por email
+        [Authorize(Roles = "Admin")]
+        [HttpPost("admin/resend-confirmation")]
+        public async Task<ActionResult<AuthResponseDto>> AdminResendConfirmation([FromBody] AdminResendConfirmationDto dto)
+        {
+            if (dto == null || string.IsNullOrWhiteSpace(dto.Email))
+            {
+                return BadRequest(new AuthResponseDto { IsSuccess = false, Message = "Email es requerido" });
+            }
+
+            var user = await _userManager.FindByEmailAsync(dto.Email);
+            if (user == null)
+            {
+                return NotFound(new AuthResponseDto { IsSuccess = false, Message = "Usuario no encontrado" });
+            }
+
+            if (user.EmailConfirmed)
+            {
+                return Ok(new AuthResponseDto { IsSuccess = true, Message = "El email ya está confirmado" });
+            }
+
+            // Generar token de confirmación y enviar correo (misma lógica que ResendConfirmationEmail)
+            try
+            {
+                var token = await _userManager.GenerateEmailConfirmationTokenAsync(user);
+                var confirmationLink = $"http://localhost:4200/confirm-email?email={user.Email}&token={WebUtility.UrlEncode(token)}";
+
+                var mailSettings = _configuration.GetSection("MailSettings");
+                var senderEmail = mailSettings["SenderEmail"];
+                var senderName = mailSettings["SenderName"];
+                var smtpServer = mailSettings["Server"];
+                var smtpPortString = mailSettings["Port"];
+                var smtpPort = smtpPortString != null ? int.Parse(smtpPortString) : 587;
+                var smtpUser = mailSettings["UserName"];
+                var smtpPass = mailSettings["Password"];
+
+                var message = new MimeKit.MimeMessage();
+                message.From.Add(new MimeKit.MailboxAddress(senderName, senderEmail));
+                message.To.Add(new MimeKit.MailboxAddress(user.NombreCompleto, user.Email));
+                message.Subject = "Confirma tu email - BusTix";
+
+                var htmlBody = $@"
+                <div style='font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;'>
+                    <div style='background-color: #007bff; padding: 20px; text-align: center;'>
+                        <h1 style='color: white; margin: 0;'>🚌 BusTix</h1>
+                    </div>
+                    <div style='padding: 30px; background-color: #f8f9fa;'>
+                        <h2 style='color: #333;'>¡Hola {user.NombreCompleto}!</h2>
+                        <p style='color: #666; font-size: 16px; line-height: 1.6;'>
+                            Hemos reenviado el enlace de confirmación. Por favor confirma tu dirección de email haciendo clic en el siguiente botón:
+                        </p>
+                        <div style='text-align: center; margin: 30px 0;'>
+                            <a href='{confirmationLink}' style='display: inline-block; padding: 15px 30px; background-color: #28a745; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 16px;'>✅ Confirmar Email</a>
+                        </div>
+                        <p style='color: #999; font-size: 14px;'>Si no solicitaste esta confirmación, puedes ignorar este email.</p>
+                        <p style='color: #999; font-size: 12px;'>Este link expira en 24 horas.</p>
+                    </div>
+                </div>";
+
+                message.Body = new MimeKit.TextPart("html") { Text = htmlBody };
+
+                using var client = new MailKit.Net.Smtp.SmtpClient();
+                await client.ConnectAsync(smtpServer, smtpPort, MailKit.Security.SecureSocketOptions.StartTls);
+                await client.AuthenticateAsync(smtpUser, smtpPass);
+                await client.SendAsync(message);
+                await client.DisconnectAsync(true);
+
+                return Ok(new AuthResponseDto { IsSuccess = true, Message = "Email de confirmación reenviado" });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error al reenviar email: {ex.Message}");
+                return StatusCode(500, new AuthResponseDto { IsSuccess = false, Message = "Error al reenviar el email de confirmación" });
+            }
         }
     }
 }
