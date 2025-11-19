@@ -322,7 +322,10 @@ public class AppDbContext : IdentityDbContext<ClApplicationUser>
             entity.HasKey(e => e.ValidacionID);
             entity.HasIndex(e => e.BoletoID);
             entity.HasIndex(e => e.ViajeID);
-            
+            entity.HasIndex(e => e.DeviceValidationId)
+                .IsUnique()
+                .HasFilter("[DeviceValidationId] IS NOT NULL");
+
             entity.HasOne(r => r.Boleto)
                 .WithMany(b => b.RegistrosValidacion)
                 .HasForeignKey(r => r.BoletoID)

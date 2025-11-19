@@ -2,6 +2,7 @@ using System.Text;
 using Hangfire;
 using prjBusTix.Data;
 using prjBusTix.Model;
+using prjBusTix.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -168,6 +169,9 @@ builder.Services.AddScoped<Microsoft.AspNetCore.Authorization.IAuthorizationHand
 builder.Services.AddScoped<prjBusTix.Services.INotificacionService, prjBusTix.Services.NotificacionService>();
 builder.Services.AddScoped<prjBusTix.Services.HangfireJobsService>();
 builder.Services.AddScoped<prjBusTix.Services.IAuditoriaService, prjBusTix.Services.AuditoriaService>();
+// Registrar servicio de validación
+builder.Services.AddScoped<prjBusTix.Services.IValidacionService, prjBusTix.Services.ValidacionService>();
+
 builder.Services.AddHttpContextAccessor(); // Necesario para auditoría
 
 // Configurar SignalR para notificaciones en tiempo real
@@ -184,18 +188,19 @@ using (var scope = app.Services.CreateScope())
         var context = services.GetRequiredService<AppDbContext>();
         var userManager = services.GetRequiredService<UserManager<ClApplicationUser>>();
         var roleManager = services.GetRequiredService<RoleManager<IdentityRole>>();
-        
+
         // Crear la base de datos si no existe
         context.Database.EnsureCreated();
-        
+
         // Aplicar migraciones pendientes
         if (context.Database.GetPendingMigrations().Any())
         {
+            // Aplicar migraciones (crea la BD si no existe)
             context.Database.Migrate();
         }
-        
+
         // Crear roles iniciales si no existen
-        string[] roleNames = { "Admin", "User", "Manager", "Operator" };
+        string[] roleNames = { "Admin", "User", "Manager", "Operator", "Staff" };
         foreach (var roleName in roleNames)
         {
             var roleExist = await roleManager.RoleExistsAsync(roleName);
@@ -223,6 +228,32 @@ using (var scope = app.Services.CreateScope())
             if (result.Succeeded)
             {
                 await userManager.AddToRoleAsync(adminUser, "Admin");
+            }
+        }
+
+        // Crear usuario staff por defecto para pruebas si no existe
+        var staffEmail = "staff@bustix.com";
+        var staffUser = await userManager.FindByEmailAsync(staffEmail);
+        if (staffUser == null)
+        {
+            staffUser = new ClApplicationUser
+            {
+                UserName = staffEmail,
+                Email = staffEmail,
+                NombreCompleto = "Staff de Pruebas",
+                EmailConfirmed = true,
+                Estatus = 1
+            };
+
+            var resultStaff = await userManager.CreateAsync(staffUser, "Staff@123456");
+            if (resultStaff.Succeeded)
+            {
+                // Asegurar que exista el rol Staff y asignarlo
+                if (!await roleManager.RoleExistsAsync("Staff"))
+                {
+                    await roleManager.CreateAsync(new IdentityRole("Staff"));
+                }
+                await userManager.AddToRoleAsync(staffUser, "Staff");
             }
         }
     }
@@ -275,9 +306,4 @@ app.MapHub<prjBusTix.Hubs.NotificacionesHub>("/hubs/notificaciones");
 
 app.MapControllers();
 
-app.Run();
-
-
-//usam kbex hkxx sudh
-
-//gnmiolwrxf115661
+app.Run();//gnmiolwrxf115661

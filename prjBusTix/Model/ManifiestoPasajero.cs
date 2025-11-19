@@ -1,4 +1,4 @@
-﻿﻿using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace prjBusTix.Model
@@ -38,8 +38,10 @@ namespace prjBusTix.Model
         
         public int? EstatusCheckIn { get; set; }
         
+        [Column(TypeName = "decimal(10,8)")]
         public decimal? CheckInLat { get; set; }
         
+        [Column(TypeName = "decimal(11,8)")]
         public decimal? CheckInLong { get; set; }
         
         [MaxLength(1000)]

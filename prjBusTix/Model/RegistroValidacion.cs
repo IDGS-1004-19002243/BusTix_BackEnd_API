@@ -1,4 +1,4 @@
-﻿﻿using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace prjBusTix.Model
@@ -26,8 +26,10 @@ namespace prjBusTix.Model
         [MaxLength(50)]
         public string? TipoValidacion { get; set; } // EscaneoQR, Manual
         
+        [Column(TypeName = "decimal(10,8)")]
         public decimal? EstacionLat { get; set; }
         
+        [Column(TypeName = "decimal(11,8)")]
         public decimal? EstacionLong { get; set; }
         
         [MaxLength(1000)]

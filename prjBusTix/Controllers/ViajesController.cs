@@ -546,56 +546,113 @@ public class ViajesController : ControllerBase
 
     /// <summary>
     /// Obtener manifiesto de pasajeros de un viaje
+    /// Soporta parámetros opcionales:
+    ///   compact=true  -> devuelve solo campos mínimos de cada pasajero
+    ///   since=ISO8601 -> devuelve solo pasajeros cuyo estado cambió después de esa fecha
     /// </summary>
     [HttpGet("{id}/manifiesto")]
     [ClRequirePermission(ClAppPermissions.ViajesView)]
-    public async Task<ActionResult<ManifiestoResponseDto>> GetManifiesto(int id)
+    public async Task<ActionResult<ManifiestoResponseDto>> GetManifiesto(int id, [FromQuery] bool compact = false, [FromQuery] DateTime? since = null)
     {
         try
         {
+            // Códigos de estatus (evita números mágicos)
+            const int ESTATUS_BOLETO_PAGADO = 10; // BOL_PAGADO
+            const int ESTATUS_BOLETO_VALIDADO = 11; // BOL_VALIDADO
+            const int ESTATUS_BOLETO_USADO = 12; // BOL_USADO
+            const int ABD_ABORDADO = 22; // ABD_ABORDADO
+            const int ABD_NO_PRESENTO = 23; // ABD_NO_PRESENTO
+
             var viaje = await _context.Viajes
                 .Include(v => v.EstatusNavigation)
                 .FirstOrDefaultAsync(v => v.ViajeID == id);
             
             if (viaje == null)
                 return NotFound(new { message = "Viaje no encontrado" });
-            
-            // Obtener todos los boletos pagados del viaje con información del cliente
-            var boletos = await _context.Boletos
+
+            // Boletos válidos para abordaje (Pagado, Validado, Usado)
+            var boletosQuery = _context.Boletos
                 .Include(b => b.Cliente)
                 .Include(b => b.ManifiestoPasajero)
                 .Include(b => b.ParadaAbordaje)
-                .Where(b => b.ViajeID == id && b.Estatus == 10) // Solo boletos pagados
+                .Where(b => b.ViajeID == id && (b.Estatus == ESTATUS_BOLETO_PAGADO || b.Estatus == ESTATUS_BOLETO_VALIDADO || b.Estatus == ESTATUS_BOLETO_USADO));
+
+            // Filtro delta (since) basado en última acción relevante
+            if (since.HasValue)
+            {
+                var s = since.Value.ToUniversalTime();
+                boletosQuery = boletosQuery.Where(b =>
+                    (b.FechaValidacion.HasValue && b.FechaValidacion.Value.ToUniversalTime() > s) ||
+                    (b.ManifiestoPasajero != null && (
+                        (b.ManifiestoPasajero.FechaValidacion.HasValue && b.ManifiestoPasajero.FechaValidacion.Value.ToUniversalTime() > s) ||
+                        (b.ManifiestoPasajero.FechaAbordaje.HasValue && b.ManifiestoPasajero.FechaAbordaje.Value.ToUniversalTime() > s)))
+                );
+            }
+
+            var boletos = await boletosQuery
                 .OrderBy(b => b.NumeroAsiento)
                 .ToListAsync();
             
-            // Contar estados de abordaje
-            int totalPasajeros = boletos.Count;
-            int abordados = boletos.Count(b => b.ManifiestoPasajero != null && 
-                                              b.ManifiestoPasajero.EstatusAbordaje == 22); // ABD_ABORDADO
-            int noAsistieron = boletos.Count(b => b.ManifiestoPasajero != null && 
-                                                  b.ManifiestoPasajero.EstatusAbordaje == 23); // ABD_NO_ASISTIO
-            int pendientes = totalPasajeros - abordados - noAsistieron;
+            int totalPasajeros = await _context.Boletos
+                .CountAsync(b => b.ViajeID == id && (b.Estatus == ESTATUS_BOLETO_PAGADO || b.Estatus == ESTATUS_BOLETO_VALIDADO || b.Estatus == ESTATUS_BOLETO_USADO));
+
+            int abordados = await _context.ManifiestoPasajeros
+                .CountAsync(m => m.ViajeID == id && m.EstatusAbordaje == ABD_ABORDADO);
             
-            var pasajeros = boletos.Select(b => new PasajeroManifiestoDto
-            {
-                BoletoID = b.BoletoID,
-                CodigoQR = b.CodigoQR,
-                ClienteID = b.ClienteID,
-                ClienteNombre = b.NombrePasajero ?? b.Cliente?.NombreCompleto ?? "Sin nombre",
-                ClienteEmail = b.EmailPasajero ?? b.Cliente?.Email,
-                ClienteTelefono = b.TelefonoPasajero ?? b.Cliente?.PhoneNumber,
-                AsientoAsignado = b.NumeroAsiento,
-                EstadoBoleto = b.Estatus == 10 ? "Pagado" : (b.Estatus == 11 ? "Usado" : "Otro"),
-                EstadoAbordaje = b.ManifiestoPasajero?.EstatusAbordaje switch
+            int noAsistieron = await _context.ManifiestoPasajeros
+                .CountAsync(m => m.ViajeID == id && m.EstatusAbordaje == ABD_NO_PRESENTO);
+            
+            int pendientes = totalPasajeros - abordados - noAsistieron;
+
+            var pasajeros = boletos.Select(b => compact
+                ? new PasajeroManifiestoDto
                 {
-                    22 => "Abordado",
-                    23 => "No Asistió",
-                    _ => "Pendiente"
-                },
-                FechaValidacion = b.FechaValidacion,
-                ValidadoPor = b.ManifiestoPasajero?.ValidadoPor
-            }).ToList();
+                    BoletoID = b.BoletoID,
+                    CodigoQR = b.CodigoQR,
+                    ClienteID = b.ClienteID,
+                    ClienteNombre = b.NombrePasajero ?? b.Cliente?.NombreCompleto ?? "Sin nombre",
+                    AsientoAsignado = b.NumeroAsiento,
+                    EstadoBoleto = b.Estatus switch
+                    {
+                        ESTATUS_BOLETO_PAGADO => "Pagado",
+                        ESTATUS_BOLETO_VALIDADO => "Validado",
+                        ESTATUS_BOLETO_USADO => "Usado",
+                        _ => "Otro"
+                    },
+                    EstadoAbordaje = b.ManifiestoPasajero?.EstatusAbordaje switch
+                    {
+                        ABD_ABORDADO => "Abordado",
+                        ABD_NO_PRESENTO => "No Presentó",
+                        _ => "Pendiente"
+                    },
+                    FechaValidacion = b.FechaValidacion,
+                    ValidadoPor = b.ManifiestoPasajero?.ValidadoPor
+                }
+                : new PasajeroManifiestoDto
+                {
+                    BoletoID = b.BoletoID,
+                    CodigoQR = b.CodigoQR,
+                    ClienteID = b.ClienteID,
+                    ClienteNombre = b.NombrePasajero ?? b.Cliente?.NombreCompleto ?? "Sin nombre",
+                    ClienteEmail = b.EmailPasajero ?? b.Cliente?.Email,
+                    ClienteTelefono = b.TelefonoPasajero ?? b.Cliente?.PhoneNumber,
+                    AsientoAsignado = b.NumeroAsiento,
+                    EstadoBoleto = b.Estatus switch
+                    {
+                        ESTATUS_BOLETO_PAGADO => "Pagado",
+                        ESTATUS_BOLETO_VALIDADO => "Validado",
+                        ESTATUS_BOLETO_USADO => "Usado",
+                        _ => "Otro"
+                    },
+                    EstadoAbordaje = b.ManifiestoPasajero?.EstatusAbordaje switch
+                    {
+                        ABD_ABORDADO => "Abordado",
+                        ABD_NO_PRESENTO => "No Presentó",
+                        _ => "Pendiente"
+                    },
+                    FechaValidacion = b.FechaValidacion,
+                    ValidadoPor = b.ManifiestoPasajero?.ValidadoPor
+                }).ToList();
             
             var response = new ManifiestoResponseDto
             {
@@ -610,8 +667,8 @@ public class ViajesController : ControllerBase
             };
             
             _logger.LogInformation(
-                "Manifiesto generado para viaje {ViajeID}: {Total} pasajeros", 
-                id, totalPasajeros);
+                "Manifiesto generado para viaje {ViajeID}: Total={Total} Devueltos={Devueltos} Compact={Compact} Since={Since}", 
+                id, totalPasajeros, pasajeros.Count, compact, since);
             
             return Ok(response);
         }
