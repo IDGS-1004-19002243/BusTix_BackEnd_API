@@ -18,26 +18,39 @@ var jwtSettings = builder.Configuration.GetSection("JWTSetting");
 // Configuración de CORS
 builder.Services.AddCors(options =>
 {
-    // Política por defecto: aceptar cualquier origen cuya host sea 'localhost' (cualquier puerto)
+    // Política por defecto: aceptar orígenes de desarrollo (localhost), LAN y Netlify
     options.AddDefaultPolicy(policy =>
     {
-        policy.SetIsOriginAllowed(origin =>
-        {
-            if (string.IsNullOrEmpty(origin)) return false;
-            try
+        policy
+            .SetIsOriginAllowed(origin =>
             {
-                var uri = new Uri(origin);
-                // permitir solo http/https y host 'localhost'
-                return (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps) && string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase);
-            }
-            catch
-            {
-                return false;
-            }
-        })
-        .AllowAnyHeader()
-        .AllowAnyMethod()
-        .AllowCredentials();
+                if (string.IsNullOrEmpty(origin)) return false;
+                try
+                {
+                    var uri = new Uri(origin);
+
+                    // Desarrollo web (localhost)
+                    if (uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+                        return true;
+
+                    // React Native en LAN (celular real o emulador): 192.168.*
+                    if (uri.Host.StartsWith("192.168."))
+                        return true;
+
+                    // Frontend en Netlify (producción web)
+                    if (uri.Host.Contains("netlify.app", StringComparison.OrdinalIgnoreCase))
+                        return true;
+
+                    return false;
+                }
+                catch
+                {
+                    return false;
+                }
+            })
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials();
     });
 
     // Política específica opcional para un origen fijo (ej. 4200)
@@ -114,8 +127,9 @@ builder.Services.AddAuthentication(options =>
         ValidateAudience = true,
         ValidateLifetime = true,
         ValidateIssuerSigningKey = true,
-        ValidAudience = jwtSettings["ValidAudience"],
+        // Mantener el issuer configurado y aceptar múltiples audiences (útil durante la transición)
         ValidIssuer = jwtSettings["ValidIssuer"],
+        ValidAudiences = new[] { jwtSettings["ValidAudience"], "http://localhost:5289", "https://waldoz-001-site1.stempurl.com" },
         IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(securityKey))
     };
 });
@@ -195,7 +209,7 @@ using (var scope = app.Services.CreateScope())
         }
         
         // Crear roles iniciales si no existen
-        string[] roleNames = { "Admin", "User", "Manager", "Operator" };
+        string[] roleNames = { "Admin", "User", "Manager", "Operator", "Staff" };
         foreach (var roleName in roleNames)
         {
             var roleExist = await roleManager.RoleExistsAsync(roleName);

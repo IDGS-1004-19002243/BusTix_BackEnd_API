@@ -289,6 +289,10 @@ public class AppDbContext : IdentityDbContext<ClApplicationUser>
             entity.HasKey(e => e.ManifiestoID);
             entity.HasIndex(e => e.ViajeID);
             entity.HasIndex(e => e.BoletoID).IsUnique();
+
+            // Precision para coordenadas
+            entity.Property(e => e.CheckInLat).HasPrecision(10, 8);
+            entity.Property(e => e.CheckInLong).HasPrecision(11, 8);
             
             entity.HasOne(m => m.Viaje)
                 .WithMany(v => v.ManifiestoPasajeros)
@@ -322,6 +326,10 @@ public class AppDbContext : IdentityDbContext<ClApplicationUser>
             entity.HasKey(e => e.ValidacionID);
             entity.HasIndex(e => e.BoletoID);
             entity.HasIndex(e => e.ViajeID);
+
+            // Precision para coordenadas
+            entity.Property(e => e.EstacionLat).HasPrecision(10, 8);
+            entity.Property(e => e.EstacionLong).HasPrecision(11, 8);
             
             entity.HasOne(r => r.Boleto)
                 .WithMany(b => b.RegistrosValidacion)
@@ -490,5 +498,4 @@ public class AppDbContext : IdentityDbContext<ClApplicationUser>
         );
     }
 }
-
 

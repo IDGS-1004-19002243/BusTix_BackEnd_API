@@ -26,8 +26,18 @@ namespace prjBusTix.Controllers
         /// <summary>
         /// Obtener todos los eventos con filtros opcionales
         /// </summary>
+        /// <param name="fechaDesde">Filtrar eventos desde esta fecha (opcional)</param>
+        /// <param name="fechaHasta">Filtrar eventos hasta esta fecha (opcional)</param>
+        /// <param name="ciudad">Filtrar por ciudad (búsqueda parcial, opcional)</param>
+        /// <param name="estatus">Filtrar por ID de estatus (opcional)</param>
+        /// <param name="soloActivos">Si es true, solo devuelve eventos activos y futuros (default: false)</param>
+        /// <returns>Lista de eventos que cumplen con los filtros</returns>
+        /// <response code="200">Devuelve la lista de eventos exitosamente</response>
+        /// <response code="500">Error interno del servidor</response>
         [HttpGet]
         [AllowAnonymous]
+        [ProducesResponseType(typeof(IEnumerable<EventoResponseDto>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
         public async Task<ActionResult<IEnumerable<EventoResponseDto>>> GetEventos(
             [FromQuery] DateTime? fechaDesde,
             [FromQuery] DateTime? fechaHasta,
@@ -92,10 +102,18 @@ namespace prjBusTix.Controllers
         }
 
         /// <summary>
-        /// Obtener un evento por ID
+        /// Obtener un evento por su ID
         /// </summary>
+        /// <param name="id">ID del evento</param>
+        /// <returns>Detalles completos del evento incluyendo número de viajes asociados</returns>
+        /// <response code="200">Devuelve el evento solicitado</response>
+        /// <response code="404">Evento no encontrado</response>
+        /// <response code="500">Error interno del servidor</response>
         [HttpGet("{id}")]
         [AllowAnonymous]
+        [ProducesResponseType(typeof(EventoResponseDto), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
         public async Task<ActionResult<EventoResponseDto>> GetEvento(int id)
         {
             try
@@ -142,13 +160,62 @@ namespace prjBusTix.Controllers
         /// <summary>
         /// Crear un nuevo evento
         /// </summary>
+        /// <param name="dto">Datos del evento a crear. Campos requeridos: Nombre y Fecha. HoraInicio debe enviarse como string "HH:mm:ss"</param>
+        /// <returns>El evento recién creado con su ID asignado</returns>
+        /// <response code="201">Evento creado exitosamente. Retorna el evento con Location header</response>
+        /// <response code="400">Datos inválidos o error de validación. Revisa el campo 'errors' en la respuesta</response>
+        /// <response code="401">No autenticado. Se requiere token JWT válido</response>
+        /// <response code="403">No autorizado. Se requiere permiso 'EventosCreate'</response>
+        /// <response code="500">Error interno del servidor</response>
+        /// <remarks>
+        /// Ejemplo de request body:
+        /// 
+        ///     POST /api/Eventos
+        ///     {
+        ///        "nombre": "Concierto Rock 2025",
+        ///        "descripcion": "Gran concierto de rock",
+        ///        "tipoEvento": "Concierto",
+        ///        "fecha": "2025-12-01T20:00:00Z",
+        ///        "horaInicio": "20:00:00",
+        ///        "recinto": "Estadio Nacional",
+        ///        "direccion": "Av. Principal 123",
+        ///        "ciudad": "Ciudad de Mexico",
+        ///        "estado": "CDMX",
+        ///        "ubicacionLat": 19.432608,
+        ///        "ubicacionLong": -99.133209,
+        ///        "urlImagen": "https://cdn.example.com/evento.jpg"
+        ///     }
+        /// </remarks>
         [HttpPost]
         [ClRequirePermission(ClAppPermissions.EventosCreate)]
+        [ProducesResponseType(typeof(EventoResponseDto), StatusCodes.Status201Created)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
         public async Task<ActionResult<EventoResponseDto>> CrearEvento([FromBody] CrearEventoDto dto)
         {
+            // Validación del modelo
+            if (!ModelState.IsValid)
+            {
+                var errors = ModelState
+                    .Where(x => x.Value?.Errors != null && x.Value.Errors.Count > 0)
+                    .SelectMany(x => x.Value!.Errors.Select(e => new 
+                    { 
+                        Field = x.Key, 
+                        Error = string.IsNullOrEmpty(e.ErrorMessage) ? e.Exception?.Message : e.ErrorMessage 
+                    }))
+                    .ToList();
+                
+                _logger.LogWarning("Validación fallida al crear evento: {@Errors}", errors);
+                return BadRequest(new { message = "Datos inválidos", errors });
+            }
+
             try
             {
                 var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+                
+                _logger.LogInformation("Creando evento '{Nombre}' por usuario {UserId}", dto.Nombre, userId);
 
                 var evento = new Evento
                 {
@@ -198,9 +265,14 @@ namespace prjBusTix.Controllers
                     })
                     .FirstOrDefaultAsync();
 
-                _logger.LogInformation("Evento {EventoID} creado por usuario {UserId}", evento.EventoID, userId);
+                _logger.LogInformation("Evento {EventoID} creado exitosamente por usuario {UserId}", evento.EventoID, userId);
 
                 return CreatedAtAction(nameof(GetEvento), new { id = evento.EventoID }, response);
+            }
+            catch (DbUpdateException dbEx)
+            {
+                _logger.LogError(dbEx, "Error de BD al crear evento");
+                return BadRequest(new { message = "Error al guardar en la base de datos", detail = dbEx.InnerException?.Message ?? dbEx.Message });
             }
             catch (Exception ex)
             {
@@ -210,17 +282,79 @@ namespace prjBusTix.Controllers
         }
 
         /// <summary>
-        /// Actualizar un evento existente
+        /// Actualizar un evento existente (actualización parcial)
         /// </summary>
+        /// <param name="id">ID del evento a actualizar</param>
+        /// <param name="dto">Campos a actualizar. Solo se actualizan los campos proporcionados (no nulos)</param>
+        /// <returns>El evento actualizado con todos sus datos</returns>
+        /// <response code="200">Evento actualizado exitosamente</response>
+        /// <response code="400">Datos inválidos</response>
+        /// <response code="401">No autenticado. Se requiere token JWT válido</response>
+        /// <response code="403">No autorizado. Se requiere permiso 'EventosUpdate'</response>
+        /// <response code="404">Evento no encontrado</response>
+        /// <response code="500">Error interno del servidor</response>
+        /// <remarks>
+        /// Este endpoint permite actualización parcial. Solo envía los campos que deseas modificar.
+        /// 
+        /// Ejemplo de request body (solo actualizar nombre y fecha):
+        /// 
+        ///     PUT /api/Eventos/5
+        ///     {
+        ///        "nombre": "Nuevo Nombre del Evento",
+        ///        "fecha": "2025-12-15T20:00:00Z"
+        ///     }
+        /// </remarks>
         [HttpPut("{id}")]
         [ClRequirePermission(ClAppPermissions.EventosUpdate)]
+        [ProducesResponseType(typeof(EventoResponseDto), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
         public async Task<ActionResult<EventoResponseDto>> ActualizarEvento(int id, [FromBody] ActualizarEventoDto dto)
         {
+            // Validar que al menos un campo esté presente para actualizar
+            if (string.IsNullOrEmpty(dto.Nombre) && 
+                dto.Descripcion == null && 
+                dto.TipoEvento == null && 
+                !dto.Fecha.HasValue && 
+                !dto.HoraInicio.HasValue && 
+                dto.Recinto == null && 
+                dto.Direccion == null && 
+                dto.Ciudad == null && 
+                dto.Estado == null && 
+                !dto.UbicacionLat.HasValue && 
+                !dto.UbicacionLong.HasValue && 
+                dto.UrlImagen == null && 
+                !dto.Estatus.HasValue)
+            {
+                return BadRequest(new { message = "Debe proporcionar al menos un campo para actualizar" });
+            }
+
+            // Validar ModelState
+            if (!ModelState.IsValid)
+            {
+                var errors = ModelState
+                    .Where(x => x.Value?.Errors != null && x.Value.Errors.Count > 0)
+                    .SelectMany(x => x.Value!.Errors.Select(e => new 
+                    { 
+                        Field = x.Key, 
+                        Error = string.IsNullOrEmpty(e.ErrorMessage) ? e.Exception?.Message : e.ErrorMessage 
+                    }))
+                    .ToList();
+                
+                _logger.LogWarning("Validación fallida al actualizar evento {EventoID}: {@Errors}", id, errors);
+                return BadRequest(new { message = "Datos inválidos", errors });
+            }
+
             try
             {
                 var evento = await _context.Eventos.FindAsync(id);
                 if (evento == null)
                     return NotFound(new { message = "Evento no encontrado" });
+
+                _logger.LogInformation("Actualizando evento {EventoID}", id);
 
                 // Actualizar solo los campos proporcionados
                 if (!string.IsNullOrEmpty(dto.Nombre))
@@ -291,9 +425,14 @@ namespace prjBusTix.Controllers
                     })
                     .FirstOrDefaultAsync();
 
-                _logger.LogInformation("Evento {EventoID} actualizado", id);
+                _logger.LogInformation("Evento {EventoID} actualizado exitosamente", id);
 
                 return Ok(response);
+            }
+            catch (DbUpdateException dbEx)
+            {
+                _logger.LogError(dbEx, "Error de BD al actualizar evento {EventoID}", id);
+                return BadRequest(new { message = "Error al guardar en la base de datos", detail = dbEx.InnerException?.Message ?? dbEx.Message });
             }
             catch (Exception ex)
             {
@@ -305,8 +444,26 @@ namespace prjBusTix.Controllers
         /// <summary>
         /// Eliminar (desactivar) un evento
         /// </summary>
+        /// <param name="id">ID del evento a eliminar</param>
+        /// <returns>Confirmación de eliminación</returns>
+        /// <response code="200">Evento eliminado (desactivado) exitosamente. El estatus cambia a Cancelado (3)</response>
+        /// <response code="400">No se puede eliminar. El evento tiene viajes activos asociados</response>
+        /// <response code="401">No autenticado. Se requiere token JWT válido</response>
+        /// <response code="403">No autorizado. Se requiere permiso 'EventosDelete'</response>
+        /// <response code="404">Evento no encontrado</response>
+        /// <response code="500">Error interno del servidor</response>
+        /// <remarks>
+        /// Este endpoint realiza un "soft delete" cambiando el estatus del evento a Cancelado (3).
+        /// No se puede eliminar un evento si tiene viajes activos asociados.
+        /// </remarks>
         [HttpDelete("{id}")]
         [ClRequirePermission(ClAppPermissions.EventosDelete)]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
         public async Task<ActionResult> EliminarEvento(int id)
         {
             try
@@ -342,8 +499,16 @@ namespace prjBusTix.Controllers
         /// <summary>
         /// Obtener viajes de un evento específico
         /// </summary>
+        /// <param name="id">ID del evento</param>
+        /// <returns>Lista de viajes asociados al evento con detalles de ruta, unidad y chofer</returns>
+        /// <response code="200">Devuelve la lista de viajes del evento</response>
+        /// <response code="404">Evento no encontrado</response>
+        /// <response code="500">Error interno del servidor</response>
         [HttpGet("{id}/viajes")]
         [AllowAnonymous]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
         public async Task<ActionResult> GetViajesDeEvento(int id)
         {
             try
