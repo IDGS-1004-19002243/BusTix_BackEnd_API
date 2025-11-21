@@ -17,5 +17,6 @@ public class IncidenciaListaDto
     public string? AsignadoNombre { get; set; }
     public int? ViajeID { get; set; }
     public string? ViajeCodigoViaje { get; set; }
+    public string? UnidadPlacas { get; set; }
 }
 

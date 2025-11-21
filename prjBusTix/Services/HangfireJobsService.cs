@@ -28,12 +28,7 @@ public class HangfireJobsService
     {
         _logger.LogInformation("Configurando trabajos recurrentes de Hangfire...");
 
-        // Solo recordatorios de viajes
-        RecurringJob.AddOrUpdate(
-            "enviar-recordatorios-viajes",
-            () => EnviarRecordatoriosViajesAsync(),
-            Cron.Hourly);
-
+        // Solo verificamos viajes próximos para programar sus recordatorios
         RecurringJob.AddOrUpdate(
             "verificar-viajes-proximos",
             () => VerificarViajesProximosAsync(),
@@ -58,62 +53,8 @@ public class HangfireJobsService
         return jobId;
     }
 
-    /// <summary>
-    /// Envía recordatorios automáticos para viajes próximos
-    /// Se ejecuta cada hora
-    /// </summary>
-    public async Task EnviarRecordatoriosViajesAsync()
-    {
-        try
-        {
-            using var scope = _serviceProvider.CreateScope();
-            var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var notifService = scope.ServiceProvider.GetRequiredService<INotificacionService>();
-
-            var ahora = DateTime.Now;
-            var en24Horas = ahora.AddHours(24);
-
-            // Buscar viajes que salgan en las próximas 24 horas
-            var viajesProximos = await context.Viajes
-                .Where(v => v.FechaSalida >= ahora && v.FechaSalida <= en24Horas)
-                .Where(v => v.Estatus == 1) // Solo viajes activos
-                .ToListAsync();
-
-            int recordatoriosEnviados = 0;
-
-            foreach (var viaje in viajesProximos)
-            {
-                var horasHastaSalida = (viaje.FechaSalida - ahora).TotalHours;
-
-                // 24 horas (ventana 24..23]
-                if (horasHastaSalida <= 24 && horasHastaSalida > 23)
-                {
-                    await notifService.EnviarRecordatorioViajeAsync(viaje.ViajeID, 24);
-                    recordatoriosEnviados++;
-                }
-                // 4 horas (ventana 4..3]
-                else if (horasHastaSalida <= 4 && horasHastaSalida > 3)
-                {
-                    await notifService.EnviarRecordatorioViajeAsync(viaje.ViajeID, 4);
-                    recordatoriosEnviados++;
-                }
-                // 2 horas (ventana 2..1]
-                else if (horasHastaSalida <= 2 && horasHastaSalida > 1)
-                {
-                    await notifService.EnviarRecordatorioViajeAsync(viaje.ViajeID, 2);
-                    recordatoriosEnviados++;
-                }
-            }
-
-            _logger.LogInformation(
-                "Proceso de recordatorios completado. {Count} recordatorios enviados",
-                recordatoriosEnviados);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error al enviar recordatorios de viajes");
-        }
-    }
+    // NOTA: Se eliminó EnviarRecordatoriosViajesAsync (estrategia de sondeo) 
+    // para evitar duplicidad con la estrategia de agendamiento (VerificarViajesProximosAsync).
 
     /// <summary>
     /// Envía un recordatorio específico para un viaje

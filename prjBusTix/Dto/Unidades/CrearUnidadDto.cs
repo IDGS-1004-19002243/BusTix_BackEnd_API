@@ -6,11 +6,11 @@ namespace prjBusTix.Dto.Unidades
     {
         [Required]
         [MaxLength(50)]
-        public string NumeroEconomico { get; set; }
+        public required string NumeroEconomico { get; set; }
         
         [Required]
         [MaxLength(50)]
-        public string Placas { get; set; }
+        public required string Placas { get; set; }
         
         [MaxLength(100)]
         public string? Marca { get; set; }
@@ -23,7 +23,7 @@ namespace prjBusTix.Dto.Unidades
         
         [Required]
         [MaxLength(50)]
-        public string TipoUnidad { get; set; }
+        public required string TipoUnidad { get; set; }
         
         [Range(1, 200, ErrorMessage = "Capacidad debe ser mayor a 0")]
         public int CapacidadAsientos { get; set; }

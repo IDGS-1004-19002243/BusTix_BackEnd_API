@@ -19,17 +19,20 @@ public class NotificacionesController : ControllerBase
     private readonly INotificacionService _notificacionService;
     private readonly UserManager<ClApplicationUser> _userManager;
     private readonly ILogger<NotificacionesController> _logger;
+    private readonly IServiceScopeFactory _scopeFactory;
     
     public NotificacionesController(
         AppDbContext context,
         INotificacionService notificacionService,
         UserManager<ClApplicationUser> userManager,
-        ILogger<NotificacionesController> logger)
+        ILogger<NotificacionesController> logger,
+        IServiceScopeFactory scopeFactory)
     {
         _context = context;
         _notificacionService = notificacionService;
         _userManager = userManager;
         _logger = logger;
+        _scopeFactory = scopeFactory;
     }
     
     /// <summary>
@@ -101,7 +104,7 @@ public class NotificacionesController : ControllerBase
                 return BadRequest(new { message = "No se encontraron destinatarios" });
             }
             
-            // Crear notificaciones para cada destinatario
+            // Crear notificaciones en BD (rápido)
             var notificaciones = new List<Notificacion>();
             
             foreach (var usuarioId in destinatarios)
@@ -115,7 +118,8 @@ public class NotificacionesController : ControllerBase
                     TipoNotificacion = dto.TipoNotificacion,
                     EnviarPush = dto.EnviarPush,
                     EnviarEmail = dto.EnviarEmail,
-                    FechaCreacion = DateTime.Now
+                    FechaCreacion = DateTime.Now,
+                    FueEnviada = false
                 };
                 
                 notificaciones.Add(notificacion);
@@ -124,20 +128,48 @@ public class NotificacionesController : ControllerBase
             _context.Notificaciones.AddRange(notificaciones);
             await _context.SaveChangesAsync();
             
-            // Enviar notificaciones en segundo plano
-            int exitosas = 0;
-            foreach (var notif in notificaciones)
-            {
-                var resultado = await _notificacionService.EnviarNotificacionAsync(notif);
-                if (resultado) exitosas++;
-            }
+            // Obtener IDs para procesar en segundo plano
+            var notificacionIds = notificaciones.Select(n => n.NotificacionID).ToList();
             
-            return Ok(new
+            // Procesar envío en segundo plano (Fire & Forget seguro con Scope)
+            _ = Task.Run(async () =>
             {
-                message = "Notificaciones enviadas",
+                using var scope = _scopeFactory.CreateScope();
+                var notifService = scope.ServiceProvider.GetRequiredService<INotificacionService>();
+                var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                
+                _logger.LogInformation("Iniciando envío en segundo plano de {Count} notificaciones...", notificacionIds.Count);
+                
+                int enviadas = 0;
+                
+                // Procesar en paralelo limitado para mayor velocidad
+                var options = new ParallelOptions { MaxDegreeOfParallelism = 5 };
+                await Parallel.ForEachAsync(notificacionIds, options, async (id, ct) =>
+                {
+                    try
+                    {
+                        // Re-consultar en el nuevo scope
+                        var notif = await dbContext.Notificaciones.FindAsync(id);
+                        if (notif != null)
+                        {
+                            var resultado = await notifService.EnviarNotificacionAsync(notif);
+                            if (resultado) Interlocked.Increment(ref enviadas);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Error enviando notificación {Id} en background", id);
+                    }
+                });
+                
+                _logger.LogInformation("Finalizado envío masivo. Exitosas: {Enviadas}/{Total}", enviadas, notificacionIds.Count);
+            });
+            
+            return Accepted(new
+            {
+                message = "Notificaciones creadas y proceso de envío iniciado en segundo plano",
                 totalDestinatarios = destinatarios.Count,
-                notificacionesCreadas = notificaciones.Count,
-                notificacionesEnviadas = exitosas
+                notificacionesCreadas = notificaciones.Count
             });
         }
         catch (Exception ex)

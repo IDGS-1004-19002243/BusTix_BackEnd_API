@@ -183,6 +183,138 @@ public class ViajesController : ControllerBase
     }
 
     /// <summary>
+    /// Obtener detalle completo del viaje para el cliente (con paradas y precios)
+    /// GET /api/viajes/{id}/detalle-cliente
+    /// </summary>
+    [HttpGet("{id}/detalle-cliente")]
+    [AllowAnonymous]
+    public async Task<ActionResult<ViajeDetalleClienteDto>> GetViajeDetalleCliente(int id)
+    {
+        try
+        {
+            var viaje = await _context.Viajes
+                .Include(v => v.Evento)
+                .Include(v => v.PlantillaRuta)
+                .Include(v => v.Unidad)
+                .Include(v => v.Chofer)
+                .Include(v => v.Paradas.OrderBy(p => p.OrdenParada))
+                .FirstOrDefaultAsync(v => v.ViajeID == id);
+
+            if (viaje == null)
+                return NotFound(new { message = "Viaje no encontrado" });
+
+            // Obtener precios específicos por parada
+            var preciosParadas = await _context.PreciosParada
+                .Where(p => p.ViajeID == id && p.EsActivo)
+                .ToDictionaryAsync(p => p.ParadaViajeID, p => p);
+
+            // Calcular precio mínimo y máximo
+            var precios = new List<decimal>();
+            foreach (var parada in viaje.Paradas)
+            {
+                decimal precioBase = viaje.PrecioBase;
+                decimal cargoServicio = viaje.CargoServicio;
+
+                if (preciosParadas.TryGetValue(parada.ParadaViajeID, out var precioParada))
+                {
+                    precioBase = precioParada.PrecioBase;
+                    cargoServicio = precioParada.CargoServicio;
+                }
+
+                decimal subtotal = precioBase + cargoServicio;
+                decimal iva = subtotal * 0.16m;
+                decimal total = subtotal + iva;
+                precios.Add(total);
+            }
+
+            decimal precioDesde = precios.Any() ? precios.Min() : viaje.PrecioBase;
+            decimal precioHasta = precios.Any() ? precios.Max() : viaje.PrecioBase;
+
+            // Construir DTO de paradas con precios
+            var paradasConPrecio = viaje.Paradas.Select(p =>
+            {
+                decimal precioBase = viaje.PrecioBase;
+                decimal cargoServicio = viaje.CargoServicio;
+
+                if (preciosParadas.TryGetValue(p.ParadaViajeID, out var precioParada))
+                {
+                    precioBase = precioParada.PrecioBase;
+                    cargoServicio = precioParada.CargoServicio;
+                }
+
+                decimal subtotal = precioBase + cargoServicio;
+                decimal iva = subtotal * 0.16m;
+                decimal total = subtotal + iva;
+
+                return new ParadaConPrecioDto
+                {
+                    ParadaViajeID = p.ParadaViajeID,
+                    NombreParada = p.NombreParada,
+                    Direccion = p.Direccion ?? "",
+                    Latitud = p.Latitud,
+                    Longitud = p.Longitud,
+                    OrdenParada = p.OrdenParada,
+                    HoraEstimadaLlegada = p.HoraEstimadaLlegada,
+                    TiempoEsperaMinutos = p.TiempoEsperaMinutos,
+                    PrecioBase = precioBase,
+                    CargoServicio = cargoServicio,
+                    PrecioTotal = precioBase + cargoServicio,
+                    IVA = iva,
+                    TotalAPagar = total,
+                    AsientosDisponibles = viaje.AsientosDisponibles
+                };
+            }).ToList();
+
+            var duracion = viaje.FechaLlegadaEstimada.HasValue
+                ? (int)(viaje.FechaLlegadaEstimada.Value - viaje.FechaSalida).TotalHours
+                : 0;
+
+            var detalle = new ViajeDetalleClienteDto
+            {
+                ViajeID = viaje.ViajeID,
+                CodigoViaje = viaje.CodigoViaje,
+                TipoViaje = viaje.TipoViaje,
+                EventoID = viaje.EventoID,
+                EventoNombre = viaje.Evento.Nombre,
+                EventoDescripcion = viaje.Evento.Descripcion ?? "",
+                EventoFecha = viaje.Evento.Fecha,
+                EventoRecinto = viaje.Evento.Recinto ?? "",
+                EventoCiudad = viaje.Evento.Ciudad ?? "",
+                EventoUrlImagen = viaje.Evento.UrlImagen,
+                RutaNombre = viaje.PlantillaRuta.NombreRuta,
+                CiudadOrigen = viaje.PlantillaRuta.CiudadOrigen,
+                CiudadDestino = viaje.PlantillaRuta.CiudadDestino,
+                FechaSalida = viaje.FechaSalida,
+                FechaLlegadaEstimada = viaje.FechaLlegadaEstimada,
+                DuracionEstimadaHoras = duracion,
+                CupoTotal = viaje.CupoTotal,
+                AsientosDisponibles = viaje.AsientosDisponibles,
+                AsientosVendidos = viaje.AsientosVendidos,
+                VentasAbiertas = viaje.VentasAbiertas,
+                PrecioBase = viaje.PrecioBase,
+                CargoServicio = viaje.CargoServicio,
+                PrecioDesde = precioDesde,
+                PrecioHasta = precioHasta,
+                UnidadModelo = viaje.Unidad?.Modelo,
+                UnidadPlacas = viaje.Unidad?.Placas,
+                CapacidadUnidad = viaje.Unidad?.CapacidadAsientos,
+                ChoferNombre = viaje.Chofer?.NombreCompleto,
+                Paradas = paradasConPrecio,
+                TieneServicioWifi = true, // TODO: Agregar estos campos al modelo Unidad
+                TieneAireAcondicionado = true,
+                TieneBaño = true
+            };
+
+            return Ok(detalle);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error al obtener detalle del viaje {ViajeID}", id);
+            return StatusCode(500, new { message = "Error al obtener detalle del viaje", error = ex.Message });
+        }
+    }
+
+    /// <summary>
     /// Crear un nuevo viaje
     /// </summary>
     [HttpPost]

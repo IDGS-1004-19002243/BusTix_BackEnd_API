@@ -48,7 +48,7 @@ public class SincronizacionController : ControllerBase
 
         var staffId = User.FindFirstValue(ClaimTypes.NameIdentifier);
 
-        var result = await _validacionService.ProcesarValidacionesAsync(validaciones, staffId);
+        var result = await _validacionService.ProcesarValidacionesAsync(validaciones, staffId!);
 
         return Ok(result);
     }

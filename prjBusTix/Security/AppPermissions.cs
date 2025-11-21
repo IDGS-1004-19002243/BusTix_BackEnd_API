@@ -30,6 +30,16 @@ namespace prjBusTix.Security
             public const string Delete = "incidencias:delete";
         }
 
+        // Permisos para módulo de Viajes
+        public static class Viajes
+        {
+            public const string View = "viajes:view";
+            public const string Create = "viajes:create";
+            public const string Edit = "viajes:edit";
+            public const string Delete = "viajes:delete";
+            public const string Validate = "viajes:validate"; // Para check-in
+        }
+
         // Mapa de permisos por rol
         public static readonly Dictionary<string, string[]> RolePermissions = new()
         {
@@ -59,7 +69,11 @@ namespace prjBusTix.Security
                     Reports_View,
                     Reports_Generate,
                     Incidencias.View,
-                    Incidencias.Update
+                    Incidencias.Update,
+                    Viajes.View,
+                    Viajes.Create,
+                    Viajes.Edit,
+                    Viajes.Delete
                 }
             },
             {
@@ -68,14 +82,17 @@ namespace prjBusTix.Security
                     Tickets_View,
                     Tickets_Create,
                     Tickets_Edit,
-                    Users_View
+                    Users_View,
+                    Viajes.View
                 }
             },
             {
                 "Staff", new[]
                 {
                     Incidencias.View,
-                    Incidencias.Create
+                    Incidencias.Create,
+                    Viajes.View,
+                    Viajes.Validate
                 }
             }
         };

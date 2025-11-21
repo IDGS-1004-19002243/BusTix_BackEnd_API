@@ -11,18 +11,8 @@ public class IniciarCompraDto
     public int ViajeID { get; set; }
     
     [Required]
-    [MaxLength(256)]
-    public string NombrePasajero { get; set; } = string.Empty;
-    
-    [EmailAddress]
-    [MaxLength(256)]
-    public string? EmailPasajero { get; set; }
-    
-    [MaxLength(50)]
-    public string? TelefonoPasajero { get; set; }
-    
-    [MaxLength(10)]
-    public string? NumeroAsiento { get; set; }
+    [MinLength(1, ErrorMessage = "Debe incluir al menos un pasajero")]
+    public List<PasajeroDto> Pasajeros { get; set; } = new();
     
     public int? ParadaAbordajeID { get; set; }
     

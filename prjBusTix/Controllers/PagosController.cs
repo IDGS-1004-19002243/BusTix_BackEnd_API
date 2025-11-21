@@ -108,6 +108,7 @@ public class PagosController : ControllerBase
                     }
                     
                     // Crear entrada en ManifiestoPasajeros automáticamente
+                    // Crear entrada en ManifiestoPasajeros automáticamente
                     var manifiesto = new ManifiestoPasajero
                     {
                         ViajeID = boleto.ViajeID,
@@ -125,8 +126,11 @@ public class PagosController : ControllerBase
                         "Boleto {CodigoBoleto} actualizado a pagado y agregado al manifiesto",
                         boleto.CodigoBoleto);
                     
-                    // 🔔 ENVIAR NOTIFICACIÓN AUTOMÁTICA DE CONFIRMACIÓN
-                    await _notificacionService.EnviarConfirmacionCompraAsync(boleto.BoletoID);
+                    // 🔔 ENVIAR BOLETO INDIVIDUAL SI EL PASAJERO TIENE EMAIL
+                    if (!string.IsNullOrEmpty(boleto.EmailPasajero))
+                    {
+                        await _notificacionService.EnviarBoletoPasajeroAsync(boleto.BoletoID);
+                    }
                 }
             }
             else
@@ -145,6 +149,12 @@ public class PagosController : ControllerBase
             
             await _context.SaveChangesAsync();
             await transaction.CommitAsync();
+            
+            // 🔔 ENVIAR RESUMEN DE COMPRA AL COMPRADOR (SOLO SI FUE EXITOSO)
+            if (pagoExitoso)
+            {
+                await _notificacionService.EnviarResumenCompraAsync(pago.PagoID);
+            }
             
             var response = new
             {

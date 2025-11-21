@@ -22,6 +22,11 @@ public class FiltroIncidenciasDto
     public int? ViajeID { get; set; }
     
     /// <summary>
+    /// Filtrar por unidad específica
+    /// </summary>
+    public int? UnidadID { get; set; }
+    
+    /// <summary>
     /// Filtrar por tipo de incidencia
     /// </summary>
     public int? TipoIncidenciaID { get; set; }
@@ -49,7 +54,7 @@ public class FiltroIncidenciasDto
     /// <summary>
     /// Búsqueda por texto en título o descripción
     /// </summary>
-    public string? TextoBusqueda { get; set; }
+    public string? Busqueda { get; set; }
     
     /// <summary>
     /// Número de página para paginación (inicia en 1)
@@ -69,5 +74,5 @@ public class FiltroIncidenciasDto
     /// <summary>
     /// Dirección del ordenamiento: asc o desc
     /// </summary>
-    public string? DireccionOrden { get; set; } = "desc";
+    public string? Direccion { get; set; } = "desc";
 }

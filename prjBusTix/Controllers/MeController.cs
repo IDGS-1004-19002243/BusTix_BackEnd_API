@@ -1,8 +1,11 @@
-﻿using Microsoft.AspNetCore.Authorization;
+﻿﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using prjBusTix.Model;
 using Microsoft.EntityFrameworkCore;
 using prjBusTix.Data;
 using prjBusTix.Dto.Boletos;
+using prjBusTix.Dto.Auth;
 using System.Security.Claims;
 
 namespace prjBusTix.Controllers;
@@ -17,11 +20,16 @@ public class MeController : ControllerBase
 {
     private readonly AppDbContext _context;
     private readonly ILogger<MeController> _logger;
+    private readonly UserManager<ClApplicationUser> _userManager;
 
-    public MeController(AppDbContext context, ILogger<MeController> logger)
+    public MeController(
+        AppDbContext context, 
+        ILogger<MeController> logger,
+        UserManager<ClApplicationUser> userManager)
     {
         _context = context;
         _logger = logger;
+        _userManager = userManager;
     }
 
     /// <summary>
@@ -157,7 +165,7 @@ public class MeController : ControllerBase
                     urlFotoPerfil = usuario.UrlFotoPerfil,
                     notificacionesPush = usuario.NotificacionesPush,
                     notificacionesEmail = usuario.NotificacionesEmail,
-                    estatus = usuario.EstatusNavigation.Nombre,
+                    estatus = usuario.EstatusNavigation?.Nombre ?? "Desconocido",
                     fechaRegistro = usuario.FechaRegistro,
                     ultimaConexion = usuario.UltimaConexion
                 }
@@ -350,5 +358,135 @@ public class MeController : ControllerBase
             });
         }
     }
-}
 
+    /// <summary>
+    /// Actualiza la información del perfil del usuario
+    /// PUT /api/me/perfil
+    /// </summary>
+    [HttpPut("perfil")]
+    public async Task<ActionResult> ActualizarPerfil([FromBody] UpdateProfileDto dto)
+    {
+        try
+        {
+            var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (string.IsNullOrEmpty(userId))
+                return Unauthorized();
+
+            var usuario = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId);
+            if (usuario == null)
+                return NotFound(new { message = "Usuario no encontrado" });
+
+            // Actualizar campos
+            usuario.NombreCompleto = dto.NombreCompleto;
+            usuario.PhoneNumber = dto.Telefono;
+            usuario.Direccion = dto.Direccion;
+            usuario.Ciudad = dto.Ciudad;
+            usuario.Estado = dto.Estado;
+            usuario.CodigoPostal = dto.CodigoPostal;
+            usuario.UrlFotoPerfil = dto.UrlFotoPerfil;
+            usuario.NotificacionesPush = dto.NotificacionesPush;
+            usuario.NotificacionesEmail = dto.NotificacionesEmail;
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                success = true,
+                message = "Perfil actualizado exitosamente",
+                data = new
+                {
+                    usuario.NombreCompleto,
+                    usuario.Email,
+                    usuario.PhoneNumber,
+                    usuario.UrlFotoPerfil
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error al actualizar perfil del usuario");
+            return StatusCode(500, new { message = "Error al actualizar el perfil" });
+        }
+    }
+
+    /// <summary>
+    /// Cambia la contraseña del usuario autenticado
+    /// POST /api/me/cambiar-password
+    /// </summary>
+    [HttpPost("cambiar-password")]
+    public async Task<ActionResult> CambiarPassword([FromBody] MeChangePasswordDto dto)
+    {
+        try
+        {
+            if (!ModelState.IsValid)
+                return BadRequest(ModelState);
+
+            var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            var usuario = await _userManager.FindByIdAsync(userId!);
+            
+            if (usuario == null)
+                return NotFound(new { success = false, message = "Usuario no encontrado" });
+
+            var result = await _userManager.ChangePasswordAsync(usuario, dto.CurrentPassword, dto.NewPassword);
+
+            if (!result.Succeeded)
+            {
+                return BadRequest(new
+                {
+                    success = false,
+                    message = "Error al cambiar la contraseña",
+                    errors = result.Errors.Select(e => e.Description)
+                });
+            }
+
+            return Ok(new
+            {
+                success = true,
+                message = "Contraseña actualizada exitosamente"
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error al cambiar contraseña");
+            return StatusCode(500, new { success = false, message = "Error al cambiar la contraseña" });
+        }
+    }
+
+    /// <summary>
+    /// Elimina la cuenta del usuario (Soft Delete)
+    /// DELETE /api/me
+    /// </summary>
+    [HttpDelete]
+    public async Task<ActionResult> EliminarCuenta()
+    {
+        try
+        {
+            var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            var usuario = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId);
+            
+            if (usuario == null)
+                return NotFound(new { message = "Usuario no encontrado" });
+
+            // Soft Delete: Cambiar estatus a Cancelado/Eliminado (asumimos 0 o un estatus específico)
+            // Verificar EstatusGeneral para "Eliminado" o "Inactivo". Usaremos 0 como inactivo/eliminado por convención.
+            usuario.Estatus = 0; 
+            usuario.Email = $"deleted_{Guid.NewGuid()}_{usuario.Email}"; // Anonimizar para permitir re-registro si es necesario
+            usuario.UserName = usuario.Email;
+            usuario.NormalizedEmail = usuario.Email.ToUpper();
+            usuario.NormalizedUserName = usuario.UserName.ToUpper();
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                success = true,
+                message = "Cuenta eliminada exitosamente. Esperamos verte pronto."
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error al eliminar cuenta");
+            return StatusCode(500, new { message = "Error al eliminar la cuenta" });
+        }
+    }
+}

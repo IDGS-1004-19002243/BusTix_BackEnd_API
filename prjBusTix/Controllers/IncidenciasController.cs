@@ -6,6 +6,7 @@ using prjBusTix.Data;
 using prjBusTix.Dto.Incidencias;
 using prjBusTix.Model;
 using prjBusTix.Security;
+using prjBusTix.Services;
 using System.Security.Claims;
 
 namespace prjBusTix.Controllers;
@@ -22,33 +23,30 @@ public class IncidenciasController : ControllerBase
     private readonly AppDbContext _context;
     private readonly UserManager<ClApplicationUser> _userManager;
     private readonly ILogger<IncidenciasController> _logger;
+    private readonly IServiceScopeFactory _scopeFactory;
 
     public IncidenciasController(
         AppDbContext context,
         UserManager<ClApplicationUser> userManager,
-        ILogger<IncidenciasController> logger)
+        ILogger<IncidenciasController> logger,
+        IServiceScopeFactory scopeFactory)
     {
         _context = context;
         _userManager = userManager;
         _logger = logger;
+        _scopeFactory = scopeFactory;
     }
 
-    #region Endpoints para Administradores (PWA)
+    #region Endpoints para Administradores
 
     /// <summary>
-    /// Obtener todas las incidencias con filtros y paginación
+    /// Obtener todas las incidencias con filtros opcionales
     /// GET: api/incidencias
     /// </summary>
-    /// <remarks>
-    /// Este endpoint es usado por los administradores en la PWA para ver el dashboard de incidencias.
-    /// Soporta múltiples filtros y paginación.
-    /// </remarks>
     [HttpGet]
     [ClRequirePermission(AppPermissions.Incidencias.View)]
-    [ProducesResponseType(typeof(object), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(StatusCodes.Status403Forbidden)]
-    public async Task<ActionResult> GetIncidencias([FromQuery] FiltroIncidenciasDto filtro)
+    [ProducesResponseType(typeof(List<IncidenciaListaDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult> GetIncidencias([FromQuery] FiltroIncidenciasDto? filtro)
     {
         try
         {
@@ -62,88 +60,79 @@ public class IncidenciasController : ControllerBase
                 .AsQueryable();
 
             // Aplicar filtros
-            if (filtro.Estatus.HasValue)
+            if (filtro != null)
             {
-                query = query.Where(i => i.Estatus == filtro.Estatus.Value);
+                if (filtro.Estatus.HasValue)
+                    query = query.Where(i => i.Estatus == filtro.Estatus.Value);
+
+                if (!string.IsNullOrWhiteSpace(filtro.Prioridad))
+                    query = query.Where(i => i.Prioridad == filtro.Prioridad);
+
+                if (filtro.TipoIncidenciaID.HasValue)
+                    query = query.Where(i => i.TipoIncidenciaID == filtro.TipoIncidenciaID.Value);
+
+                if (filtro.ViajeID.HasValue)
+                    query = query.Where(i => i.ViajeID == filtro.ViajeID.Value);
+
+                if (filtro.UnidadID.HasValue)
+                    query = query.Where(i => i.UnidadID == filtro.UnidadID.Value);
+
+                if (!string.IsNullOrWhiteSpace(filtro.ReportadoPor))
+                    query = query.Where(i => i.ReportadoPor == filtro.ReportadoPor);
+
+                if (!string.IsNullOrWhiteSpace(filtro.AsignadoA))
+                    query = query.Where(i => i.AsignadoA == filtro.AsignadoA);
+
+                if (filtro.FechaDesde.HasValue)
+                    query = query.Where(i => i.FechaReporte >= filtro.FechaDesde.Value);
+
+                if (filtro.FechaHasta.HasValue)
+                    query = query.Where(i => i.FechaReporte <= filtro.FechaHasta.Value);
+
+                if (!string.IsNullOrWhiteSpace(filtro.Busqueda))
+                {
+                    var busqueda = filtro.Busqueda.ToLower();
+                    query = query.Where(i =>
+                        i.CodigoIncidencia.ToLower().Contains(busqueda) ||
+                        i.Titulo.ToLower().Contains(busqueda) ||
+                        i.Descripcion.ToLower().Contains(busqueda));
+                }
+
+                // Aplicar ordenamiento
+                query = AplicarOrdenamiento(query, filtro.OrdenarPor, filtro.Direccion);
+            }
+            else
+            {
+                // Orden por defecto: más recientes primero
+                query = query.OrderByDescending(i => i.FechaReporte);
             }
 
-            if (!string.IsNullOrWhiteSpace(filtro.Prioridad))
+            var incidencias = await query.ToListAsync();
+            var response = incidencias.Select(i => new IncidenciaListaDto
             {
-                query = query.Where(i => i.Prioridad == filtro.Prioridad);
-            }
-
-            if (filtro.ViajeID.HasValue)
-            {
-                query = query.Where(i => i.ViajeID == filtro.ViajeID.Value);
-            }
-
-            if (filtro.TipoIncidenciaID.HasValue)
-            {
-                query = query.Where(i => i.TipoIncidenciaID == filtro.TipoIncidenciaID.Value);
-            }
-
-            if (!string.IsNullOrWhiteSpace(filtro.AsignadoA))
-            {
-                query = query.Where(i => i.AsignadoA == filtro.AsignadoA);
-            }
-
-            if (!string.IsNullOrWhiteSpace(filtro.ReportadoPor))
-            {
-                query = query.Where(i => i.ReportadoPor == filtro.ReportadoPor);
-            }
-
-            if (filtro.FechaDesde.HasValue)
-            {
-                query = query.Where(i => i.FechaReporte >= filtro.FechaDesde.Value);
-            }
-
-            if (filtro.FechaHasta.HasValue)
-            {
-                var fechaHastaFinal = filtro.FechaHasta.Value.Date.AddDays(1).AddSeconds(-1);
-                query = query.Where(i => i.FechaReporte <= fechaHastaFinal);
-            }
-
-            // Búsqueda por texto en título o descripción
-            if (!string.IsNullOrWhiteSpace(filtro.TextoBusqueda))
-            {
-                var busqueda = filtro.TextoBusqueda.ToLower();
-                query = query.Where(i => 
-                    i.Titulo.ToLower().Contains(busqueda) || 
-                    i.Descripcion.ToLower().Contains(busqueda) ||
-                    i.CodigoIncidencia.ToLower().Contains(busqueda));
-            }
-
-            // Aplicar ordenamiento
-            query = AplicarOrdenamiento(query, filtro.OrdenarPor, filtro.DireccionOrden);
-
-            // Obtener el total antes de paginar
-            var total = await query.CountAsync();
-
-            // Validar paginación
-            if (filtro.Pagina < 1) filtro.Pagina = 1;
-            if (filtro.TamanoPagina < 1) filtro.TamanoPagina = 20;
-            if (filtro.TamanoPagina > 100) filtro.TamanoPagina = 100;
-
-            // Aplicar paginación y proyección
-            var incidencias = await query
-                .Skip((filtro.Pagina - 1) * filtro.TamanoPagina)
-                .Take(filtro.TamanoPagina)
-                .Select(i => MapearAIncidenciaResponse(i))
-                .ToListAsync();
+                IncidenciaID = i.IncidenciaID,
+                CodigoIncidencia = i.CodigoIncidencia,
+                Titulo = i.Titulo,
+                TipoIncidenciaNombre = i.TipoIncidencia.Nombre,
+                Prioridad = i.Prioridad,
+                Estatus = i.Estatus,
+                EstatusNombre = i.EstatusNavigation.Nombre,
+                ReportadorNombre = i.Reportador.NombreCompleto ?? i.Reportador.UserName ?? "",
+                FechaReporte = i.FechaReporte,
+                ViajeCodigoViaje = i.Viaje?.CodigoViaje,
+                UnidadPlacas = i.Unidad?.Placas
+            }).ToList();
 
             return Ok(new
             {
                 success = true,
-                data = incidencias,
-                totalRegistros = total,
-                pagina = filtro.Pagina,
-                tamanoPagina = filtro.TamanoPagina,
-                totalPaginas = (int)Math.Ceiling(total / (double)filtro.TamanoPagina)
+                data = response,
+                total = response.Count
             });
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error al obtener las incidencias con filtros: {@Filtro}", filtro);
+            _logger.LogError(ex, "Error al obtener incidencias");
             return StatusCode(500, new
             {
                 success = false,
@@ -176,7 +165,6 @@ public class IncidenciasController : ControllerBase
 
             if (incidencia == null)
             {
-                _logger.LogWarning("Incidencia con ID {IncidenciaId} no encontrada", id);
                 return NotFound(new
                 {
                     success = false,
@@ -204,16 +192,6 @@ public class IncidenciasController : ControllerBase
         }
     }
 
-    /// <summary>
-    /// Actualizar el estado, prioridad o asignación de una incidencia
-    /// PUT: api/incidencias/{id}
-    /// </summary>
-    /// <remarks>
-    /// Este endpoint es usado por administradores para gestionar incidencias:
-    /// - Cambiar el estatus (Abierta → En Proceso → Resuelta → Cerrada)
-    /// - Modificar la prioridad
-    /// - Asignar a un técnico o responsable
-    /// </remarks>
     [HttpPut("{id}")]
     [ClRequirePermission(AppPermissions.Incidencias.Update)]
     [ProducesResponseType(typeof(IncidenciaResponseDto), StatusCodes.Status200OK)]
@@ -277,8 +255,9 @@ public class IncidenciasController : ControllerBase
                 }
             }
 
-            // Guardar valores anteriores para log
+            // Guardar valores anteriores para log y lógica de notificaciones
             var estatusAnterior = incidencia.Estatus;
+            var asignadoAnterior = incidencia.AsignadoA;
             var prioridadAnterior = incidencia.Prioridad;
 
             // Actualizar campos
@@ -308,6 +287,78 @@ public class IncidenciasController : ControllerBase
             _logger.LogInformation(
                 "Incidencia {IncidenciaId} actualizada. Estatus: {EstatusAnterior} → {EstatusNuevo}, Prioridad: {PrioridadAnterior} → {PrioridadNueva}",
                 id, estatusAnterior, dto.Estatus, prioridadAnterior, incidencia.Prioridad);
+
+            // --- NOTIFICACIONES OPTIMIZADAS (Background) ---
+            var notificacionesParaEnviar = new List<Notificacion>();
+            var reporteId = incidencia.ReportadoPor;
+            var nuevoAsignadoId = incidencia.AsignadoA;
+            var codigoIncidencia = incidencia.CodigoIncidencia;
+            var tituloIncidencia = incidencia.Titulo;
+
+            // 1. Notificar asignación (si cambió el asignado y no es nulo)
+            if (!string.IsNullOrEmpty(nuevoAsignadoId) && nuevoAsignadoId != asignadoAnterior)
+            {
+                notificacionesParaEnviar.Add(new Notificacion
+                {
+                    UsuarioID = nuevoAsignadoId,
+                    Titulo = "Nueva Incidencia Asignada",
+                    Mensaje = $"Se te ha asignado la incidencia {codigoIncidencia}: {tituloIncidencia}",
+                    TipoNotificacion = "Incidencia",
+                    EnviarPush = true,
+                    EnviarEmail = true,
+                    FechaCreacion = DateTime.Now,
+                    FueEnviada = false
+                });
+            }
+
+            // 2. Notificar resolución (si se resolvió/cerró y cambió el estatus)
+            if ((dto.Estatus == 3 || dto.Estatus == 4) && estatusAnterior != dto.Estatus)
+            {
+                notificacionesParaEnviar.Add(new Notificacion
+                {
+                    UsuarioID = reporteId,
+                    Titulo = "Incidencia Resuelta",
+                    Mensaje = $"Tu incidencia {codigoIncidencia} ha sido marcada como {(dto.Estatus == 3 ? "Resuelta" : "Cerrada")}.",
+                    TipoNotificacion = "Incidencia",
+                    EnviarPush = true,
+                    EnviarEmail = true,
+                    FechaCreacion = DateTime.Now,
+                    FueEnviada = false
+                });
+            }
+
+            if (notificacionesParaEnviar.Any())
+            {
+                _context.Notificaciones.AddRange(notificacionesParaEnviar);
+                await _context.SaveChangesAsync();
+
+                var notifIds = notificacionesParaEnviar.Select(n => n.NotificacionID).ToList();
+
+                // Fire & Forget seguro
+                _ = Task.Run(async () =>
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var notifService = scope.ServiceProvider.GetRequiredService<INotificacionService>();
+                    var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+                    foreach (var notifId in notifIds)
+                    {
+                        try
+                        {
+                            var notif = await dbContext.Notificaciones.FindAsync(notifId);
+                            if (notif != null)
+                            {
+                                await notifService.EnviarNotificacionAsync(notif);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, "Error enviando notificación de incidencia {Id} en background", notifId);
+                        }
+                    }
+                });
+            }
+            // -----------------------------------------------
 
             // Recargar con las relaciones actualizadas
             await _context.Entry(incidencia)

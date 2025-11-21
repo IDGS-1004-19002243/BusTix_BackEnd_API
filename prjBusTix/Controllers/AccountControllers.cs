@@ -97,7 +97,10 @@ namespace prjBusTix.Controllers
             try
             {
                 var token = await _userManager.GenerateEmailConfirmationTokenAsync(user);
-                var confirmationLink = $"http://localhost:4200/confirm-email?email={user.Email}&token={WebUtility.UrlEncode(token)}";
+                var request = HttpContext.Request;
+                var baseUrl = $"{request.Scheme}://{request.Host}";
+                // Usar Uri.EscapeDataString para asegurar codificación correcta de caracteres especiales como '+'
+                var confirmationLink = $"{baseUrl}/api/account/confirm-email?email={user.Email}&token={Uri.EscapeDataString(token)}";
 
                 var mailSettings = _configuration.GetSection("MailSettings");
                 var senderEmail = mailSettings["SenderEmail"];
@@ -110,7 +113,7 @@ namespace prjBusTix.Controllers
 
                 var message = new MimeKit.MimeMessage();
                 message.From.Add(new MimeKit.MailboxAddress(senderName, senderEmail));
-                message.To.Add(new MimeKit.MailboxAddress(user.NombreCompleto, user.Email)); // Eliminado operador ?? redundante
+                message.To.Add(new MimeKit.MailboxAddress(user.NombreCompleto, user.Email));
                 message.Subject = "Confirma tu email - BusTix";
 
                 var htmlBody = $@"
@@ -1208,111 +1211,6 @@ namespace prjBusTix.Controllers
             return Content(htmlResponse, "text/html");
         }
 
-        // Método helper para generar HTML de confirmación
-        private string GenerateConfirmationHtml(bool success, string message, string? email)
-        {
-            var iconColor = success ? "#28a745" : "#dc3545";
-            var icon = success ? "✅" : "❌";
-            var title = success ? "¡Confirmación Exitosa!" : "Error de Confirmación";
-            var backgroundColor = success ? "#d4edda" : "#f8d7da";
-            var borderColor = success ? "#c3e6cb" : "#f5c6cb";
-            var textColor = success ? "#155724" : "#721c24";
-
-            return $@"
-<!DOCTYPE html>
-<html lang='es'>
-<head>
-    <meta charset='UTF-8'>
-    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
-    <title>{title} - BusTix</title>
-    <style>
-        * {{
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }}
-        body {{
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            padding: 20px;
-        }}
-        .container {{
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            max-width: 500px;
-            width: 100%;
-            padding: 40px;
-            text-align: center;
-        }}
-        .icon {{
-            font-size: 80px;
-            margin-bottom: 20px;
-        }}
-        h1 {{
-            color: {iconColor};
-            margin-bottom: 20px;
-            font-size: 28px;
-        }}
-        .message-box {{
-            background-color: {backgroundColor};
-            border: 1px solid {borderColor};
-            color: {textColor};
-            padding: 20px;
-            border-radius: 10px;
-            margin-bottom: 30px;
-            line-height: 1.6;
-        }}
-        .email {{
-            color: #666;
-            font-size: 14px;
-            margin-bottom: 30px;
-        }}
-        .btn {{
-            display: inline-block;
-            padding: 15px 30px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            text-decoration: none;
-            border-radius: 10px;
-            font-weight: bold;
-            transition: transform 0.3s;
-        }}
-        .btn:hover {{
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
-        }}
-        .footer {{
-            margin-top: 30px;
-            padding-top: 20px;
-            border-top: 1px solid #e0e0e0;
-            color: #666;
-            font-size: 12px;
-        }}
-    </style>
-</head>
-<body>
-    <div class='container'>
-        <div class='icon'>{icon}</div>
-        <h1>{title}</h1>
-        <div class='message-box'>
-            {message}
-        </div>
-        {(string.IsNullOrEmpty(email) ? "" : $"<p class='email'>📧 {email}</p>")}
-        {(success ? "<a href='http://localhost:4200/login' class='btn'>Ir al Login</a>" : "<a href='javascript:history.back()' class='btn'>Volver</a>")}
-        <div class='footer'>
-            <p>🚌 BusTix - Sistema de Gestión de Boletos</p>
-            <p>© 2025 Todos los derechos reservados</p>
-        </div>
-    </div>
-</body>
-</html>";
-        }
-
         // ✅ api/account/resend-confirmation-email (Reenviar email de confirmación)
         [AllowAnonymous]
         [HttpPost("resend-confirmation-email")]
@@ -1349,7 +1247,9 @@ namespace prjBusTix.Controllers
 
             // Generar token de confirmación
             var token = await _userManager.GenerateEmailConfirmationTokenAsync(user);
-            var confirmationLink = $"http://localhost:4200/confirm-email?email={user.Email}&token={WebUtility.UrlEncode(token)}";
+            var request = HttpContext.Request;
+            var baseUrl = $"{request.Scheme}://{request.Host}";
+            var confirmationLink = $"{baseUrl}/api/account/confirm-email?email={user.Email}&token={Uri.EscapeDataString(token)}";
 
             // Leer configuración de correo
             var mailSettings = _configuration.GetSection("MailSettings");
@@ -1366,7 +1266,7 @@ namespace prjBusTix.Controllers
                 // Enviar correo con HTML
                 var message = new MimeKit.MimeMessage();
                 message.From.Add(new MimeKit.MailboxAddress(senderName, senderEmail));
-                message.To.Add(new MimeKit.MailboxAddress(user.NombreCompleto, user.Email)); // Eliminado operador ?? redundante
+                message.To.Add(new MimeKit.MailboxAddress(user.NombreCompleto, user.Email));
                 message.Subject = "Confirma tu email - BusTix";
 
                 var htmlBody = $@"
@@ -1381,23 +1281,10 @@ namespace prjBusTix.Controllers
                             por favor confirma tu dirección de email haciendo clic en el siguiente botón:
                         </p>
                         <div style='text-align: center; margin: 30px 0;'>
-                            <a href='{confirmationLink}' style='
-                                display: inline-block;
-                                padding: 15px 30px;
-                                background-color: #28a745;
-                                color: white;
-                                text-decoration: none;
-                                border-radius: 5px;
-                                font-weight: bold;
-                                font-size: 16px;
-                            '>✅ Confirmar Email</a>
+                            <a href='{confirmationLink}' style='display: inline-block; padding: 15px 30px; background-color: #28a745; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 16px;'>✅ Confirmar Email</a>
                         </div>
-                        <p style='color: #999; font-size: 14px;'>
-                            Si no solicitaste esta confirmación, puedes ignorar este email.
-                        </p>
-                        <p style='color: #999; font-size: 12px;'>
-                            Este link expira en 24 horas.
-                        </p>
+                        <p style='color: #999; font-size: 14px;'>Si no solicitaste esta confirmación, puedes ignorar este email.</p>
+                        <p style='color: #999; font-size: 12px;'>Este link expira en 24 horas.</p>
                     </div>
                     <div style='background-color: #343a40; padding: 15px; text-align: center;'>
                         <p style='color: #adb5bd; font-size: 12px; margin: 0;'>
@@ -1562,7 +1449,9 @@ namespace prjBusTix.Controllers
             try
             {
                 var token = await _userManager.GenerateEmailConfirmationTokenAsync(user);
-                var confirmationLink = $"http://localhost:4200/confirm-email?email={user.Email}&token={WebUtility.UrlEncode(token)}";
+                var request = HttpContext.Request;
+                var baseUrl = $"{request.Scheme}://{request.Host}";
+                var confirmationLink = $"{baseUrl}/api/account/confirm-email?email={user.Email}&token={Uri.EscapeDataString(token)}";
 
                 var mailSettings = _configuration.GetSection("MailSettings");
                 var senderEmail = mailSettings["SenderEmail"];
@@ -1611,6 +1500,97 @@ namespace prjBusTix.Controllers
                 Console.WriteLine($"Error al reenviar email: {ex.Message}");
                 return StatusCode(500, new AuthResponseDto { IsSuccess = false, Message = "Error al reenviar el email de confirmación" });
             }
+        }
+
+        private string GenerateConfirmationHtml(bool success, string message, string? email)
+        {
+            var statusIcon = success ? "✅" : "❌";
+            var statusColor = success ? "#28a745" : "#dc3545";
+            var statusTitle = success ? "Confirmación Exitosa" : "Error en Confirmación";
+
+            return $@"
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset='UTF-8'>
+    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+    <title>{statusTitle} - BusTix</title>
+    <style>
+        body {{
+            font-family: Arial, sans-serif;
+            background-color: #f8f9fa;
+            margin: 0;
+            padding: 20px;
+        }}
+        .container {{
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }}
+        .header {{
+            background-color: #007bff;
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }}
+        .content {{
+            padding: 40px;
+            text-align: center;
+        }}
+        .icon {{
+            font-size: 72px;
+            margin-bottom: 20px;
+        }}
+        .message {{
+            color: #333;
+            font-size: 18px;
+            margin: 20px 0;
+            line-height: 1.6;
+        }}
+        .email {{
+            color: #666;
+            font-size: 14px;
+            margin: 10px 0;
+        }}
+        .button {{
+            display: inline-block;
+            padding: 15px 30px;
+            background-color: {statusColor};
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            margin-top: 20px;
+            font-weight: bold;
+        }}
+        .footer {{
+            background-color: #343a40;
+            color: #adb5bd;
+            padding: 20px;
+            text-align: center;
+            font-size: 12px;
+        }}
+    </style>
+</head>
+<body>
+    <div class='container'>
+        <div class='header'>
+            <h1>🚌 BusTix</h1>
+        </div>
+        <div class='content'>
+            <div class='icon'>{statusIcon}</div>
+            <h2 style='color: {statusColor};'>{statusTitle}</h2>
+            <p class='message'>{message}</p>
+            {(email != null ? $"<p class='email'>Email: {email}</p>" : "")}
+        </div>
+        <div class='footer'>
+            <p>© 2025 BusTix - Sistema de Gestión de Boletos</p>
+        </div>
+    </div>
+</body>
+</html>";
         }
     }
 }

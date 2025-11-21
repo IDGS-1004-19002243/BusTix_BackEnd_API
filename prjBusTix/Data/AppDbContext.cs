@@ -20,6 +20,8 @@ public class AppDbContext : IdentityDbContext<ClApplicationUser>
     public DbSet<Viaje> Viajes { get; set; }
     public DbSet<ViajeStaff> ViajesStaff { get; set; }
     public DbSet<ParadaViaje> ParadasViaje { get; set; }
+    public DbSet<PrecioParada> PreciosParada { get; set; }
+    public DbSet<EstadoParadaViaje> EstadosParadaViaje { get; set; }
     public DbSet<Cupon> Cupones { get; set; }
     public DbSet<Boleto> Boletos { get; set; }
     public DbSet<Pago> Pagos { get; set; }
@@ -195,6 +197,56 @@ public class AppDbContext : IdentityDbContext<ClApplicationUser>
             entity.HasOne(pv => pv.PlantillaParada)
                 .WithMany(pp => pp.ParadasViaje)
                 .HasForeignKey(pv => pv.PlantillaParadaID)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+        
+        // ===== CONFIGURACIÓN PRECIOS PARADA =====
+        modelBuilder.Entity<PrecioParada>(entity =>
+        {
+            entity.HasKey(e => e.PrecioParadaID);
+            entity.HasIndex(e => new { e.ViajeID, e.ParadaViajeID }).IsUnique();
+            
+            entity.HasOne(pp => pp.Viaje)
+                .WithMany()
+                .HasForeignKey(pp => pp.ViajeID)
+                .OnDelete(DeleteBehavior.Cascade);
+                
+            entity.HasOne(pp => pp.ParadaViaje)
+                .WithMany()
+                .HasForeignKey(pp => pp.ParadaViajeID)
+                .OnDelete(DeleteBehavior.Restrict);
+                
+            entity.HasOne(pp => pp.Creador)
+                .WithMany()
+                .HasForeignKey(pp => pp.CreadoPor)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+        
+        // ===== CONFIGURACIÓN ESTADO PARADA VIAJE =====
+        modelBuilder.Entity<EstadoParadaViaje>(entity =>
+        {
+            entity.HasKey(e => e.EstadoParadaViajeID);
+            entity.HasIndex(e => new { e.ViajeID, e.ParadaViajeID }).IsUnique();
+            entity.HasIndex(e => e.Estado);
+            
+            entity.HasOne(ep => ep.Viaje)
+                .WithMany()
+                .HasForeignKey(ep => ep.ViajeID)
+                .OnDelete(DeleteBehavior.Cascade);
+                
+            entity.HasOne(ep => ep.ParadaViaje)
+                .WithMany()
+                .HasForeignKey(ep => ep.ParadaViajeID)
+                .OnDelete(DeleteBehavior.Restrict);
+                
+            entity.HasOne(ep => ep.Chofer)
+                .WithMany()
+                .HasForeignKey(ep => ep.ConfirmadoPorChofer)
+                .OnDelete(DeleteBehavior.Restrict);
+                
+            entity.HasOne(ep => ep.Staff)
+                .WithMany()
+                .HasForeignKey(ep => ep.ValidadoPorStaff)
                 .OnDelete(DeleteBehavior.Restrict);
         });
         

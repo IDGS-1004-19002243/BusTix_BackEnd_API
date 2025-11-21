@@ -21,7 +21,7 @@ public class ReportesController : ControllerBase
     }
 
     /// <summary>
-    /// Reporte de ventas por período
+    /// Reporte de ventas por período (Optimizado)
     /// GET /api/reportes/ventas
     /// </summary>
     [HttpGet("ventas")]
@@ -36,49 +36,66 @@ public class ReportesController : ControllerBase
             var desde = fechaDesde ?? DateTime.Now.AddMonths(-1);
             var hasta = fechaHasta ?? DateTime.Now;
 
-            var query = _context.Boletos
-                .Include(b => b.Viaje)
-                    .ThenInclude(v => v.Evento)
-                .Include(b => b.Viaje)
-                    .ThenInclude(v => v.PlantillaRuta)
-                .Where(b => b.FechaCompra >= desde && b.FechaCompra <= hasta);
+            var query = _context.Boletos.AsQueryable();
+
+            // Filtros
+            query = query.Where(b => b.FechaCompra >= desde && b.FechaCompra <= hasta);
 
             if (eventoId.HasValue)
                 query = query.Where(b => b.Viaje.EventoID == eventoId.Value);
 
-            var boletos = await query.ToListAsync();
+            // 1. Totales Generales (Ejecutado en BD)
+            var stats = await query
+                .GroupBy(b => 1)
+                .Select(g => new
+                {
+                    TotalBoletos = g.Count(),
+                    BoletosVendidos = g.Count(b => b.Estatus == 10 || b.Estatus == 11),
+                    BoletosCancelados = g.Count(b => b.Estatus == 12),
+                    IngresoTotal = g.Where(b => b.Estatus == 10 || b.Estatus == 11).Sum(b => (decimal?)b.PrecioTotal) ?? 0,
+                    IngresoBase = g.Where(b => b.Estatus == 10 || b.Estatus == 11).Sum(b => (decimal?)b.PrecioBase) ?? 0,
+                    Descuentos = g.Where(b => b.Estatus == 10 || b.Estatus == 11).Sum(b => (decimal?)b.Descuento) ?? 0,
+                    Cargos = g.Where(b => b.Estatus == 10 || b.Estatus == 11).Sum(b => (decimal?)b.CargoServicio) ?? 0
+                })
+                .FirstOrDefaultAsync();
+
+            // 2. Ventas por Evento (Ejecutado en BD)
+            var ventasPorEvento = await query
+                .GroupBy(b => new { b.Viaje.EventoID, b.Viaje.Evento.Nombre })
+                .Select(g => new
+                {
+                    eventoId = g.Key.EventoID,
+                    eventoNombre = g.Key.Nombre,
+                    totalBoletos = g.Count(),
+                    ingresoTotal = g.Where(b => b.Estatus == 10 || b.Estatus == 11).Sum(b => (decimal?)b.PrecioTotal) ?? 0
+                })
+                .OrderByDescending(x => x.ingresoTotal)
+                .ToListAsync();
+
+            // 3. Ventas por Día (Ejecutado en BD)
+            var ventasPorDia = await query
+                .GroupBy(b => b.FechaCompra.Date)
+                .Select(g => new
+                {
+                    fecha = g.Key,
+                    totalBoletos = g.Count(),
+                    ingresoTotal = g.Where(b => b.Estatus == 10 || b.Estatus == 11).Sum(b => (decimal?)b.PrecioTotal) ?? 0
+                })
+                .OrderBy(x => x.fecha)
+                .ToListAsync();
 
             var reporte = new
             {
                 periodo = new { desde, hasta },
-                totalBoletos = boletos.Count,
-                boletosVendidos = boletos.Count(b => b.Estatus == 10 || b.Estatus == 11),
-                boletosCancelados = boletos.Count(b => b.Estatus == 12),
-                ingresoTotal = boletos.Where(b => b.Estatus == 10 || b.Estatus == 11).Sum(b => b.PrecioTotal),
-                ingresoBase = boletos.Where(b => b.Estatus == 10 || b.Estatus == 11).Sum(b => b.PrecioBase),
-                descuentosAplicados = boletos.Where(b => b.Estatus == 10 || b.Estatus == 11).Sum(b => b.Descuento),
-                cargosServicio = boletos.Where(b => b.Estatus == 10 || b.Estatus == 11).Sum(b => b.CargoServicio),
-                ventasPorEvento = boletos
-                    .GroupBy(b => new { b.Viaje.EventoID, b.Viaje.Evento.Nombre })
-                    .Select(g => new
-                    {
-                        eventoId = g.Key.EventoID,
-                        eventoNombre = g.Key.Nombre,
-                        totalBoletos = g.Count(),
-                        ingresoTotal = g.Where(b => b.Estatus == 10 || b.Estatus == 11).Sum(b => b.PrecioTotal)
-                    })
-                    .OrderByDescending(x => x.ingresoTotal)
-                    .ToList(),
-                ventasPorDia = boletos
-                    .GroupBy(b => b.FechaCompra.Date)
-                    .Select(g => new
-                    {
-                        fecha = g.Key,
-                        totalBoletos = g.Count(),
-                        ingresoTotal = g.Where(b => b.Estatus == 10 || b.Estatus == 11).Sum(b => b.PrecioTotal)
-                    })
-                    .OrderBy(x => x.fecha)
-                    .ToList()
+                totalBoletos = stats?.TotalBoletos ?? 0,
+                boletosVendidos = stats?.BoletosVendidos ?? 0,
+                boletosCancelados = stats?.BoletosCancelados ?? 0,
+                ingresoTotal = stats?.IngresoTotal ?? 0,
+                ingresoBase = stats?.IngresoBase ?? 0,
+                descuentosAplicados = stats?.Descuentos ?? 0,
+                cargosServicio = stats?.Cargos ?? 0,
+                ventasPorEvento,
+                ventasPorDia
             };
 
             return Ok(reporte);
@@ -91,7 +108,7 @@ public class ReportesController : ControllerBase
     }
 
     /// <summary>
-    /// Reporte de ocupación de viajes
+    /// Reporte de ocupación de viajes (Optimizado)
     /// GET /api/reportes/ocupacion
     /// </summary>
     [HttpGet("ocupacion")]
@@ -106,56 +123,103 @@ public class ReportesController : ControllerBase
             var desde = fechaDesde ?? DateTime.Now;
             var hasta = fechaHasta ?? DateTime.Now.AddMonths(1);
 
-            var query = _context.Viajes
-                .Include(v => v.Evento)
-                .Include(v => v.PlantillaRuta)
-                .Include(v => v.Unidad)
-                .Where(v => v.FechaSalida >= desde && v.FechaSalida <= hasta);
+            var query = _context.Viajes.AsQueryable();
+
+            // Filtros
+            query = query.Where(v => v.FechaSalida >= desde && v.FechaSalida <= hasta);
 
             if (eventoId.HasValue)
                 query = query.Where(v => v.EventoID == eventoId.Value);
 
-            var viajes = await query.ToListAsync();
+            // 1. Totales Generales (BD)
+            var stats = await query
+                .GroupBy(v => 1)
+                .Select(g => new
+                {
+                    TotalViajes = g.Count(),
+                    ViajesCompletos = g.Count(v => v.AsientosDisponibles == 0),
+                    TotalAsientos = g.Sum(v => v.CupoTotal),
+                    TotalVendidos = g.Sum(v => v.AsientosVendidos)
+                })
+                .FirstOrDefaultAsync();
+
+            // 2. Ocupación por Evento (BD)
+            var rawOcupacionEvento = await query
+                .GroupBy(v => new { v.EventoID, v.Evento.Nombre })
+                .Select(g => new
+                {
+                    eventoId = g.Key.EventoID,
+                    eventoNombre = g.Key.Nombre,
+                    totalViajes = g.Count(),
+                    totalAsientos = g.Sum(v => v.CupoTotal),
+                    asientosVendidos = g.Sum(v => v.AsientosVendidos)
+                })
+                .ToListAsync();
+
+            // Calcular porcentajes en memoria (más seguro y limpio)
+            var ocupacionPorEvento = rawOcupacionEvento
+                .Select(x => new
+                {
+                    x.eventoId,
+                    x.eventoNombre,
+                    x.totalViajes,
+                    x.totalAsientos,
+                    x.asientosVendidos,
+                    porcentajeOcupacion = x.totalAsientos > 0 
+                        ? Math.Round((x.asientosVendidos * 100.0) / x.totalAsientos, 2) 
+                        : 0
+                })
+                .OrderByDescending(x => x.porcentajeOcupacion)
+                .ToList();
+
+            // 3. Detalle por Viaje (Proyección optimizada)
+            var ocupacionPorViaje = await query
+                .Select(v => new
+                {
+                    v.ViajeID,
+                    v.CodigoViaje,
+                    eventoNombre = v.Evento.Nombre,
+                    rutaNombre = v.PlantillaRuta.NombreRuta,
+                    v.FechaSalida,
+                    v.CupoTotal,
+                    v.AsientosVendidos,
+                    v.AsientosDisponibles,
+                    unidadPlacas = v.Unidad != null ? v.Unidad.Placas : null
+                })
+                .ToListAsync();
+
+            // Calcular porcentaje por viaje en memoria
+            var ocupacionPorViajeFinal = ocupacionPorViaje
+                .Select(v => new 
+                {
+                    v.ViajeID,
+                    v.CodigoViaje,
+                    v.eventoNombre,
+                    v.rutaNombre,
+                    v.FechaSalida,
+                    v.CupoTotal,
+                    v.AsientosVendidos,
+                    v.AsientosDisponibles,
+                    v.unidadPlacas,
+                    porcentajeOcupacion = v.CupoTotal > 0 
+                        ? Math.Round((v.AsientosVendidos * 100.0) / v.CupoTotal, 2) 
+                        : 0
+                })
+                .OrderByDescending(x => x.porcentajeOcupacion)
+                .ToList();
 
             var reporte = new
             {
                 periodo = new { desde, hasta },
-                totalViajes = viajes.Count,
-                viajesCompletos = viajes.Count(v => v.AsientosDisponibles == 0),
-                promedioOcupacion = viajes.Any() 
-                    ? Math.Round(viajes.Average(v => (v.AsientosVendidos * 100.0) / v.CupoTotal), 2)
+                totalViajes = stats?.TotalViajes ?? 0,
+                viajesCompletos = stats?.ViajesCompletos ?? 0,
+                promedioOcupacion = (stats?.TotalAsientos ?? 0) > 0 
+                    ? Math.Round(((stats?.TotalVendidos ?? 0) * 100.0) / (stats?.TotalAsientos ?? 1), 2) 
                     : 0,
-                totalAsientosDisponibles = viajes.Sum(v => v.CupoTotal),
-                totalAsientosVendidos = viajes.Sum(v => v.AsientosVendidos),
-                ocupacionPorViaje = viajes
-                    .Select(v => new
-                    {
-                        v.ViajeID,
-                        v.CodigoViaje,
-                        eventoNombre = v.Evento.Nombre,
-                        rutaNombre = v.PlantillaRuta.NombreRuta,
-                        v.FechaSalida,
-                        v.CupoTotal,
-                        v.AsientosVendidos,
-                        v.AsientosDisponibles,
-                        porcentajeOcupacion = Math.Round((v.AsientosVendidos * 100.0) / v.CupoTotal, 2),
-                        unidadPlacas = v.Unidad != null ? v.Unidad.Placas : null
-                    })
-                    .OrderByDescending(x => x.porcentajeOcupacion)
-                    .ToList(),
-                ocupacionPorEvento = viajes
-                    .GroupBy(v => new { v.EventoID, v.Evento.Nombre })
-                    .Select(g => new
-                    {
-                        eventoId = g.Key.EventoID,
-                        eventoNombre = g.Key.Nombre,
-                        totalViajes = g.Count(),
-                        totalAsientos = g.Sum(v => v.CupoTotal),
-                        asientosVendidos = g.Sum(v => v.AsientosVendidos),
-                        porcentajeOcupacion = Math.Round((g.Sum(v => v.AsientosVendidos) * 100.0) / g.Sum(v => v.CupoTotal), 2)
-                    })
-                    .OrderByDescending(x => x.porcentajeOcupacion)
-                    .ToList()
+                totalAsientosDisponibles = stats?.TotalAsientos ?? 0,
+                totalAsientosVendidos = stats?.TotalVendidos ?? 0,
+                ocupacionPorViaje = ocupacionPorViajeFinal,
+                ocupacionPorEvento
             };
 
             return Ok(reporte);

@@ -1,4 +1,4 @@
-﻿using prjBusTix.Model;
+﻿﻿using prjBusTix.Model;
 
 namespace prjBusTix.Services;
 
@@ -38,8 +38,23 @@ public interface INotificacionService
     Task EnviarRecordatorioViajeAsync(int viajeId, int horasAntes);
     
     /// <summary>
+    /// Notifica a pasajeros cuando el chofer llega a su parada
+    /// </summary>
+    Task NotificarLlegadaChoferParadaAsync(int viajeId, int paradaViajeId);
+    
+    /// <summary>
     /// Obtiene tokens de dispositivos activos del usuario
     /// </summary>
     Task<List<string>> ObtenerTokensDispositivosAsync(string usuarioId);
+
+    /// <summary>
+    /// Envía resumen de compra con todos los boletos al comprador
+    /// </summary>
+    Task EnviarResumenCompraAsync(int pagoId);
+
+    /// <summary>
+    /// Envía boleto individual al pasajero (si proporcionó email)
+    /// </summary>
+    Task EnviarBoletoPasajeroAsync(int boletoId);
 }
 

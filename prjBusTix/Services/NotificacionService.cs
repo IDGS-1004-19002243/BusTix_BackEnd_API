@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.SignalR;
+﻿﻿using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using prjBusTix.Data;
 using prjBusTix.Hubs;
@@ -385,6 +385,81 @@ public class NotificacionService : INotificacionService
     }
     
     /// <summary>
+    /// Notifica a los pasajeros cuando el chofer llega a su parada
+    /// </summary>
+    public async Task NotificarLlegadaChoferParadaAsync(int viajeId, int paradaViajeId)
+    {
+        try
+        {
+            var viaje = await _context.Viajes
+                .Include(v => v.PlantillaRuta)
+                .FirstOrDefaultAsync(v => v.ViajeID == viajeId);
+                
+            var parada = await _context.ParadasViaje
+                .FirstOrDefaultAsync(p => p.ParadaViajeID == paradaViajeId);
+            
+            if (viaje == null || parada == null)
+            {
+                _logger.LogWarning("Viaje {ViajeId} o Parada {ParadaId} no encontrados", viajeId, paradaViajeId);
+                return;
+            }
+            
+            // Obtener pasajeros que abordan en esta parada
+            var boletos = await _context.Boletos
+                .Where(b => b.ViajeID == viajeId 
+                    && b.ParadaAbordajeID == paradaViajeId 
+                    && b.Estatus == 10) // Solo pagados
+                .ToListAsync();
+            
+            if (!boletos.Any())
+            {
+                _logger.LogInformation("No hay pasajeros para notificar en parada {ParadaId}", paradaViajeId);
+                return;
+            }
+            
+            var notificaciones = new List<Notificacion>();
+            
+            foreach (var boleto in boletos)
+            {
+                var notificacion = new Notificacion
+                {
+                    UsuarioID = boleto.ClienteID,
+                    ViajeID = viaje.ViajeID,
+                    BoletoID = boleto.BoletoID,
+                    Titulo = "¡Tu autobús ha llegado! 🚌",
+                    Mensaje = $"El autobús para tu viaje a {viaje.PlantillaRuta.CiudadDestino} " +
+                             $"ha llegado a {parada.NombreParada}. " +
+                             $"Por favor dirígete al punto de abordaje. " +
+                             $"Código de boleto: {boleto.CodigoBoleto}",
+                    TipoNotificacion = "LlegadaChofer",
+                    EnviarPush = true,
+                    EnviarEmail = false,
+                    FechaCreacion = DateTime.Now
+                };
+                
+                notificaciones.Add(notificacion);
+            }
+            
+            _context.Notificaciones.AddRange(notificaciones);
+            await _context.SaveChangesAsync();
+            
+            // Enviar en segundo plano
+            foreach (var notif in notificaciones)
+            {
+                _ = Task.Run(() => EnviarNotificacionAsync(notif));
+            }
+            
+            _logger.LogInformation(
+                "Notificados {Count} pasajeros de llegada a parada {ParadaId}",
+                notificaciones.Count, paradaViajeId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error al notificar llegada a parada {ParadaId}", paradaViajeId);
+        }
+    }
+    
+    /// <summary>
     /// Obtiene los tokens de dispositivos activos del usuario
     /// </summary>
     public async Task<List<string>> ObtenerTokensDispositivosAsync(string usuarioId)
@@ -400,6 +475,121 @@ public class NotificacionService : INotificacionService
         {
             _logger.LogError(ex, "Error al obtener tokens de usuario {UsuarioId}", usuarioId);
             return new List<string>();
+        }
+    }
+
+    /// <summary>
+    /// Envía resumen de compra con todos los boletos al comprador
+    /// </summary>
+    public async Task EnviarResumenCompraAsync(int pagoId)
+    {
+        try
+        {
+            var pago = await _context.Pagos
+                .Include(p => p.PagosBoletos)
+                    .ThenInclude(pb => pb.Boleto)
+                        .ThenInclude(b => b.Viaje)
+                            .ThenInclude(v => v.PlantillaRuta)
+                .Include(p => p.PagosBoletos)
+                    .ThenInclude(pb => pb.Boleto)
+                        .ThenInclude(b => b.ParadaAbordaje)
+                .FirstOrDefaultAsync(p => p.PagoID == pagoId);
+
+            if (pago == null || !pago.PagosBoletos.Any()) return;
+
+            var usuario = await _context.Users.FindAsync(pago.UsuarioID);
+            if (usuario == null || string.IsNullOrEmpty(usuario.Email)) return;
+
+            var primerBoleto = pago.PagosBoletos.First().Boleto;
+            var viaje = primerBoleto.Viaje;
+            int cantidadBoletos = pago.PagosBoletos.Count;
+
+            // Construir lista de boletos para el email
+            var listaBoletosHtml = "<ul style='list-style: none; padding: 0;'>";
+            foreach (var pb in pago.PagosBoletos)
+            {
+                listaBoletosHtml += $@"
+                <li style='background: #f1f1f1; margin-bottom: 10px; padding: 10px; border-radius: 5px;'>
+                    <strong>Pasajero:</strong> {pb.Boleto.NombrePasajero}<br/>
+                    <strong>Asiento:</strong> {pb.Boleto.NumeroAsiento}<br/>
+                    <strong>Código:</strong> {pb.Boleto.CodigoBoleto}<br/>
+                    <strong>Parada:</strong> {pb.Boleto.ParadaAbordaje?.NombreParada ?? "Principal"}
+                </li>";
+            }
+            listaBoletosHtml += "</ul>";
+
+            string titulo = $"¡Compra Confirmada! {cantidadBoletos} Boletos 🎫";
+            string mensaje = $@"
+                <h3>¡Tu viaje a {viaje.PlantillaRuta.CiudadDestino} está listo!</h3>
+                <p>Hemos confirmado tu pago por <strong>${pago.Monto:F2}</strong>.</p>
+                <p><strong>Detalles del Viaje:</strong><br/>
+                Salida: {viaje.FechaSalida:dd/MM/yyyy HH:mm}<br/>
+                Origen: {viaje.PlantillaRuta.CiudadOrigen}</p>
+                <hr/>
+                <h4>Tus Boletos:</h4>
+                {listaBoletosHtml}
+                <p>Presenta estos códigos QR al abordar.</p>";
+
+            // Enviar Email
+            await EnviarEmailAsync(usuario.Email, titulo, mensaje);
+
+            // Crear Notificación en App (Solo una)
+            var notificacion = new Notificacion
+            {
+                UsuarioID = pago.UsuarioID,
+                Titulo = titulo,
+                Mensaje = $"Compra confirmada de {cantidadBoletos} boletos para {viaje.PlantillaRuta.CiudadDestino}. Toca para ver detalles.",
+                TipoNotificacion = "ConfirmacionCompra",
+                EnviarPush = true,
+                EnviarEmail = false, // Ya enviamos el email manual arriba
+                FechaCreacion = DateTime.Now,
+                ViajeID = viaje.ViajeID
+            };
+            
+            _context.Notificaciones.Add(notificacion);
+            await _context.SaveChangesAsync();
+            
+            // Enviar Push
+            await EnviarNotificacionAsync(notificacion);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error al enviar resumen de compra para pago {PagoId}", pagoId);
+        }
+    }
+
+    /// <summary>
+    /// Envía boleto individual al pasajero (si proporcionó email)
+    /// </summary>
+    public async Task EnviarBoletoPasajeroAsync(int boletoId)
+    {
+        try
+        {
+            var boleto = await _context.Boletos
+                .Include(b => b.Viaje)
+                    .ThenInclude(v => v.PlantillaRuta)
+                .Include(b => b.ParadaAbordaje)
+                .FirstOrDefaultAsync(b => b.BoletoID == boletoId);
+
+            if (boleto == null || string.IsNullOrEmpty(boleto.EmailPasajero)) return;
+
+            string titulo = "¡Tu Boleto de BusTix! 🎫";
+            string mensaje = $@"
+                <h3>Hola {boleto.NombrePasajero},</h3>
+                <p>Te han comprado un boleto para viajar a <strong>{boleto.Viaje.PlantillaRuta.CiudadDestino}</strong>.</p>
+                <div style='background: #e9ecef; padding: 15px; border-radius: 5px; text-align: center;'>
+                    <h2>{boleto.CodigoBoleto}</h2>
+                    <p>Asiento: <strong>{boleto.NumeroAsiento}</strong></p>
+                    <p>Salida: {boleto.Viaje.FechaSalida:dd/MM/yyyy HH:mm}</p>
+                    <p>Parada: {boleto.ParadaAbordaje?.NombreParada}</p>
+                </div>
+                <p>Presenta este código al abordar.</p>";
+
+            await EnviarEmailAsync(boleto.EmailPasajero, titulo, mensaje);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error al enviar boleto a pasajero {BoletoId}", boletoId);
         }
     }
 }
