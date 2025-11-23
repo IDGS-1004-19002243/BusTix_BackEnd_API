@@ -183,8 +183,7 @@ builder.Services.AddScoped<Microsoft.AspNetCore.Authorization.IAuthorizationHand
 builder.Services.AddScoped<prjBusTix.Services.INotificacionService, prjBusTix.Services.NotificacionService>();
 builder.Services.AddScoped<prjBusTix.Services.HangfireJobsService>();
 builder.Services.AddScoped<prjBusTix.Services.IAuditoriaService, prjBusTix.Services.AuditoriaService>();
-// Registrar servicio de validación
-builder.Services.AddScoped<prjBusTix.Services.IValidacionService, prjBusTix.Services.ValidacionService>();
+// Nota: El servicio de sincronización de validaciones (batch/offline) fue removido.
 
 builder.Services.AddHttpContextAccessor(); // Necesario para auditoría
 
