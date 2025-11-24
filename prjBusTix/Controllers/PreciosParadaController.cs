@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using prjBusTix.Data;
@@ -46,8 +46,7 @@ public class PreciosParadaController : ControllerBase
             var precios = await _context.PreciosParada
                 .Include(p => p.ParadaViaje)
                 .Include(p => p.Creador)
-                .Where(p => p.ViajeID == viajeId && p.EsActivo && p.ParadaViaje != null)
-                .OrderBy(p => p.ParadaViaje.OrdenParada)
+                .Where(p => p.ViajeID == viajeId && p.EsActivo)
                 .Select(p => new PrecioParadaResponseDto
                 {
                     PrecioParadaID = p.PrecioParadaID,
@@ -61,9 +60,13 @@ public class PreciosParadaController : ControllerBase
                     FechaCreacion = p.FechaCreacion,
                     CreadoPor = p.CreadoPor,
                     NombreCreador = p.Creador != null ? p.Creador.NombreCompleto : null,
-                    Observaciones = p.Observaciones
+                    Observaciones = p.Observaciones,
+                    OrdenParada = p.ParadaViaje != null ? p.ParadaViaje.OrdenParada : 999
                 })
                 .ToListAsync();
+
+            // Ordenar en memoria por OrdenParada
+            precios = precios.OrderBy(p => p.OrdenParada).ToList();
 
             return Ok(precios);
         }
@@ -103,7 +106,8 @@ public class PreciosParadaController : ControllerBase
                     FechaCreacion = p.FechaCreacion,
                     CreadoPor = p.CreadoPor,
                     NombreCreador = p.Creador != null ? p.Creador.NombreCompleto : null,
-                    Observaciones = p.Observaciones
+                    Observaciones = p.Observaciones,
+                    OrdenParada = p.ParadaViaje != null ? p.ParadaViaje.OrdenParada : 999
                 })
                 .FirstOrDefaultAsync();
 
@@ -125,7 +129,8 @@ public class PreciosParadaController : ControllerBase
                     CargoServicio = viaje.CargoServicio,
                     PrecioTotal = viaje.PrecioBase + viaje.CargoServicio,
                     EsActivo = true,
-                    Observaciones = "Precio base del viaje (sin configuración específica)"
+                    Observaciones = "Precio base del viaje (sin configuración específica)",
+                    OrdenParada = parada.OrdenParada
                 });
             }
 
