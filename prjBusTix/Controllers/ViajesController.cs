@@ -530,31 +530,6 @@ public class ViajesController : ControllerBase
 
             await _context.SaveChangesAsync();
 
-            // Crear precios automáticos para todas las paradas usando el precio base del viaje
-            var paradasCreadas = await _context.ParadasViaje
-                .Where(p => p.ViajeID == viaje.ViajeID)
-                .OrderBy(p => p.OrdenParada)
-                .ToListAsync();
-
-            foreach (var parada in paradasCreadas)
-            {
-                var precioParada = new PrecioParada
-                {
-                    ViajeID = viaje.ViajeID,
-                    ParadaViajeID = parada.ParadaViajeID,
-                    PrecioBase = viaje.PrecioBase,
-                    CargoServicio = viaje.CargoServicio,
-                    PrecioTotal = viaje.PrecioBase + viaje.CargoServicio,
-                    EsActivo = true,
-                    FechaCreacion = DateTime.Now,
-                    CreadoPor = userId,
-                    Observaciones = "Precio base inicial del viaje"
-                };
-                _context.PreciosParada.Add(precioParada);
-            }
-
-            await _context.SaveChangesAsync();
-
             var response = await _context.Viajes
                 .Include(v => v.Evento)
                 .Include(v => v.PlantillaRuta)
@@ -652,40 +627,11 @@ public class ViajesController : ControllerBase
             if (dto.FechaLlegadaEstimada.HasValue)
                 viaje.FechaLlegadaEstimada = dto.FechaLlegadaEstimada;
 
-            bool preciosActualizados = false;
-            
             if (dto.PrecioBase.HasValue)
-            {
                 viaje.PrecioBase = dto.PrecioBase.Value;
-                preciosActualizados = true;
-            }
 
             if (dto.CargoServicio.HasValue)
-            {
                 viaje.CargoServicio = dto.CargoServicio.Value;
-                preciosActualizados = true;
-            }
-
-            // Si se actualizaron los precios base, sincronizar los precios de paradas que no han sido personalizados
-            if (preciosActualizados)
-            {
-                var preciosDefault = await _context.PreciosParada
-                    .Where(p => p.ViajeID == id && 
-                                p.EsActivo && 
-                                p.Observaciones == "Precio base inicial del viaje")
-                    .ToListAsync();
-
-                foreach (var precio in preciosDefault)
-                {
-                    precio.PrecioBase = viaje.PrecioBase;
-                    precio.CargoServicio = viaje.CargoServicio;
-                    precio.PrecioTotal = viaje.PrecioBase + viaje.CargoServicio;
-                }
-
-                _logger.LogInformation(
-                    "Sincronizados {Count} precios de paradas para viaje {ViajeId}", 
-                    preciosDefault.Count, id);
-            }
 
             if (dto.VentasAbiertas.HasValue)
                 viaje.VentasAbiertas = dto.VentasAbiertas.Value;

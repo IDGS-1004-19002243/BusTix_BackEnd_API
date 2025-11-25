@@ -37,7 +37,6 @@
         public string? CreadoPor { get; set; }
         public string? NombreCreador { get; set; }
         public string? Observaciones { get; set; }
-        public int OrdenParada { get; set; } // Para ordenamiento
     }
 }
 
