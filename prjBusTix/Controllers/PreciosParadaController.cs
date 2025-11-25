@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using prjBusTix.Data;
@@ -47,13 +47,12 @@ public class PreciosParadaController : ControllerBase
                 .Include(p => p.ParadaViaje)
                 .Include(p => p.Creador)
                 .Where(p => p.ViajeID == viajeId && p.EsActivo)
-                .OrderBy(p => p.ParadaViaje.OrdenParada)
                 .Select(p => new PrecioParadaResponseDto
                 {
                     PrecioParadaID = p.PrecioParadaID,
                     ViajeID = p.ViajeID,
                     ParadaViajeID = p.ParadaViajeID,
-                    NombreParada = p.ParadaViaje.NombreParada,
+                    NombreParada = p.ParadaViaje != null ? p.ParadaViaje.NombreParada : "Desconocida",
                     PrecioBase = p.PrecioBase,
                     CargoServicio = p.CargoServicio,
                     PrecioTotal = p.PrecioTotal,
@@ -61,9 +60,13 @@ public class PreciosParadaController : ControllerBase
                     FechaCreacion = p.FechaCreacion,
                     CreadoPor = p.CreadoPor,
                     NombreCreador = p.Creador != null ? p.Creador.NombreCompleto : null,
-                    Observaciones = p.Observaciones
+                    Observaciones = p.Observaciones,
+                    OrdenParada = p.ParadaViaje != null ? p.ParadaViaje.OrdenParada : 999
                 })
                 .ToListAsync();
+
+            // Ordenar en memoria por OrdenParada
+            precios = precios.OrderBy(p => p.OrdenParada).ToList();
 
             return Ok(precios);
         }
@@ -95,7 +98,7 @@ public class PreciosParadaController : ControllerBase
                     PrecioParadaID = p.PrecioParadaID,
                     ViajeID = p.ViajeID,
                     ParadaViajeID = p.ParadaViajeID,
-                    NombreParada = p.ParadaViaje.NombreParada,
+                    NombreParada = p.ParadaViaje != null ? p.ParadaViaje.NombreParada : "Desconocida",
                     PrecioBase = p.PrecioBase,
                     CargoServicio = p.CargoServicio,
                     PrecioTotal = p.PrecioTotal,
@@ -103,7 +106,8 @@ public class PreciosParadaController : ControllerBase
                     FechaCreacion = p.FechaCreacion,
                     CreadoPor = p.CreadoPor,
                     NombreCreador = p.Creador != null ? p.Creador.NombreCompleto : null,
-                    Observaciones = p.Observaciones
+                    Observaciones = p.Observaciones,
+                    OrdenParada = p.ParadaViaje != null ? p.ParadaViaje.OrdenParada : 999
                 })
                 .FirstOrDefaultAsync();
 
@@ -125,7 +129,8 @@ public class PreciosParadaController : ControllerBase
                     CargoServicio = viaje.CargoServicio,
                     PrecioTotal = viaje.PrecioBase + viaje.CargoServicio,
                     EsActivo = true,
-                    Observaciones = "Precio base del viaje (sin configuración específica)"
+                    Observaciones = "Precio base del viaje (sin configuración específica)",
+                    OrdenParada = parada.OrdenParada
                 });
             }
 
@@ -177,6 +182,11 @@ public class PreciosParadaController : ControllerBase
             if (paradasValidas.Count != paradaIds.Count)
                 return BadRequest(new { message = "Una o más paradas no pertenecen al viaje especificado" });
 
+            // Obtener todos los precios existentes para este viaje en una sola consulta
+            var preciosExistentes = await _context.PreciosParada
+                .Where(p => p.ViajeID == viajeId)
+                .ToDictionaryAsync(p => p.ParadaViajeID, p => p);
+
             var preciosCreados = new List<PrecioParada>();
             var preciosActualizados = new List<PrecioParada>();
 
@@ -188,11 +198,8 @@ public class PreciosParadaController : ControllerBase
                     return BadRequest(new { message = $"Los precios no pueden ser negativos (Parada: {dto.ParadaViajeID})" });
                 }
 
-                // Buscar si ya existe un precio para esta parada
-                var precioExistente = await _context.PreciosParada
-                    .FirstOrDefaultAsync(p => p.ViajeID == viajeId && p.ParadaViajeID == dto.ParadaViajeID);
-
-                if (precioExistente != null)
+                // Buscar si ya existe un precio para esta parada en memoria
+                if (preciosExistentes.TryGetValue(dto.ParadaViajeID, out var precioExistente))
                 {
                     // Actualizar precio existente
                     precioExistente.PrecioBase = dto.PrecioBase;
@@ -274,6 +281,10 @@ public class PreciosParadaController : ControllerBase
             if (dto.PrecioBase < 0 || dto.CargoServicio < 0)
                 return BadRequest(new { message = "Los precios no pueden ser negativos" });
 
+            // Validar consistencia si se envía ParadaViajeID
+            if (dto.ParadaViajeID != 0 && dto.ParadaViajeID != precio.ParadaViajeID)
+                return BadRequest(new { message = "No se puede cambiar la parada asociada a un precio existente" });
+
             precio.PrecioBase = dto.PrecioBase;
             precio.CargoServicio = dto.CargoServicio;
             precio.PrecioTotal = dto.PrecioBase + dto.CargoServicio;
@@ -286,7 +297,7 @@ public class PreciosParadaController : ControllerBase
                 PrecioParadaID = precio.PrecioParadaID,
                 ViajeID = precio.ViajeID,
                 ParadaViajeID = precio.ParadaViajeID,
-                NombreParada = precio.ParadaViaje.NombreParada,
+                NombreParada = precio.ParadaViaje != null ? precio.ParadaViaje.NombreParada : "Desconocida",
                 PrecioBase = precio.PrecioBase,
                 CargoServicio = precio.CargoServicio,
                 PrecioTotal = precio.PrecioTotal,
@@ -364,14 +375,20 @@ public class PreciosParadaController : ControllerBase
             if (viaje == null)
                 return NotFound(new { message = "Viaje no encontrado" });
 
+            // Obtener IDs de paradas que ya tienen precio configurado
+            var paradasConPrecio = await _context.PreciosParada
+                .Where(p => p.ViajeID == viajeId)
+                .Select(p => p.ParadaViajeID)
+                .ToListAsync();
+            
+            var paradasConPrecioSet = new HashSet<int>(paradasConPrecio);
+
             var preciosCreados = 0;
 
             foreach (var parada in viaje.Paradas)
             {
-                var precioExiste = await _context.PreciosParada
-                    .AnyAsync(p => p.ViajeID == viajeId && p.ParadaViajeID == parada.ParadaViajeID);
-
-                if (!precioExiste)
+                // Verificar en memoria si ya tiene precio
+                if (!paradasConPrecioSet.Contains(parada.ParadaViajeID))
                 {
                     var nuevoPrecio = new PrecioParada
                     {

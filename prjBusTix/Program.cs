@@ -55,9 +55,9 @@ builder.Services.AddCors(options =>
     });
 
     // Política específica opcional para un origen fijo (ej. 4200)
-    options.AddPolicy("Local4200", policy =>
+    options.AddPolicy("Local3000", policy =>
     {
-        policy.WithOrigins("http://localhost:4200")
+        policy.WithOrigins("http://localhost:3000")
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials();
