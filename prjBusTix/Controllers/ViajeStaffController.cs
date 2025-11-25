@@ -24,18 +24,28 @@ namespace prjBusTix.Controllers
         [HttpPost]
         public async Task<ActionResult<StaffViajeResponseDto>> AsignarStaff(int viajeId, [FromBody] AsignarStaffViajeDto dto)
         {
+            // 1. Validar que el viaje existe
             var viaje = await _context.Viajes.FindAsync(viajeId);
             if (viaje == null)
                 return NotFound(new { message = "Viaje no encontrado" });
 
+            // 2. Validar que el usuario existe
             var staff = await _context.Users.FindAsync(dto.StaffID);
-            if (staff == null || staff.Estatus != 1)
-                return BadRequest(new { message = "El staff especificado no existe o no está activo" });
+            if (staff == null)
+                return BadRequest(new { message = "El usuario especificado no existe" });
 
-            var yaAsignado = await _context.ViajesStaff.AnyAsync(vs => vs.ViajeID == viajeId && vs.StaffID == dto.StaffID);
+            //3. Validar que el usuario está activo
+            if (staff.Estatus != 1)
+                return BadRequest(new { message = "El usuario no está activo en el sistema" });
+
+            // 4. Validar que no esté ya asignado a este viaje
+            var yaAsignado = await _context.ViajesStaff
+                .AnyAsync(vs => vs.ViajeID == viajeId && vs.StaffID == dto.StaffID);
+            
             if (yaAsignado)
-                return BadRequest(new { message = "Este staff ya está asignado a este viaje" });
+                return BadRequest(new { message = "Este usuario ya está asignado a este viaje" });
 
+            // 5. Crear la asignación
             var asignacion = new ViajeStaff
             {
                 ViajeID = viajeId,

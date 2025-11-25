@@ -1,4 +1,4 @@
-﻿﻿using Microsoft.AspNetCore.Authorization;
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using prjBusTix.Data;
@@ -156,7 +156,195 @@ public class BoletosController : ControllerBase
     }
     
     /// <summary>
-    /// Obtiene un boleto específico
+    /// Iniciar proceso de compra de boletos
+    /// POST /api/boletos/iniciar-compra
+    /// </summary>
+    [HttpPost("iniciar-compra")]
+    public async Task<ActionResult> IniciarCompra([FromBody] IniciarCompraDto dto)
+    {
+        using var transaction = await _context.Database.BeginTransactionAsync();
+        
+        try
+        {
+            var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (string.IsNullOrEmpty(userId))
+                return Unauthorized();
+
+            // 1. Validar Viaje
+            var viaje = await _context.Viajes
+                .Include(v => v.PlantillaRuta)
+                .Include(v => v.Paradas)
+                .FirstOrDefaultAsync(v => v.ViajeID == dto.ViajeID);
+            
+            if (viaje == null)
+                return NotFound(new { message = "Viaje no encontrado" });
+
+            // Validar Parada de abordaje (si se envió)
+            if (dto.ParadaAbordajeID.HasValue)
+            {
+                var parada = viaje.Paradas.FirstOrDefault(p => p.ParadaViajeID == dto.ParadaAbordajeID.Value);
+                if (parada == null)
+                    return BadRequest(new { message = "La parada de abordaje no pertenece a este viaje" });
+            }
+
+            // 2. Validar Disponibilidad
+            if (viaje.AsientosDisponibles < dto.Pasajeros.Count)
+                return BadRequest(new { message = $"Solo quedan {viaje.AsientosDisponibles} asientos disponibles" });
+
+            // 3. Calcular Precios
+            decimal precioBase = viaje.PrecioBase;
+            decimal cargoServicio = viaje.CargoServicio;
+
+            if (dto.ParadaAbordajeID.HasValue)
+            {
+                var precioParada = await _context.PreciosParada
+                    .FirstOrDefaultAsync(p => p.ViajeID == dto.ViajeID && 
+                                             p.ParadaViajeID == dto.ParadaAbordajeID.Value && 
+                                             p.EsActivo);
+                
+                if (precioParada != null)
+                {
+                    precioBase = precioParada.PrecioBase;
+                    cargoServicio = precioParada.CargoServicio;
+                }
+            }
+
+            // 4. Aplicar Cupón (si existe)
+            decimal descuentoUnitario = 0;
+            int? cuponId = null;
+            
+            if (dto.CuponID.HasValue)
+            {
+                var cupon = await _context.Cupones.FindAsync(dto.CuponID.Value);
+                if (cupon != null && cupon.EsActivo)
+                {
+                    // Validaciones básicas de cupón
+                    var ahora = DateTime.Now;
+                    if ((!cupon.FechaInicio.HasValue || ahora >= cupon.FechaInicio.Value) &&
+                        (!cupon.FechaExpiracion.HasValue || ahora <= cupon.FechaExpiracion.Value) &&
+                        (!cupon.UsosMaximos.HasValue || cupon.UsosRealizados < cupon.UsosMaximos.Value))
+                    {
+                        if (cupon.TipoDescuento == "Porcentaje")
+                            descuentoUnitario = precioBase * (cupon.ValorDescuento / 100);
+                        else if (cupon.TipoDescuento == "MontoFijo")
+                            descuentoUnitario = cupon.ValorDescuento;
+                            
+                        cuponId = cupon.CuponID;
+                    }
+                }
+            }
+
+            // 5. Crear Boletos y Pago
+            var boletosCreados = new List<Boleto>();
+            decimal montoTotalPago = 0;
+            
+            // Determinar asientos (simple asignación secuencial para este ejemplo, idealmente sería selección de mapa)
+            // Buscamos los asientos ocupados para no repetirlos
+            var asientosOcupadosStr = await _context.Boletos
+                .Where(b => b.ViajeID == dto.ViajeID && 
+                           (b.Estatus == ESTATUS_BOLETO_PAGADO || b.Estatus == ESTATUS_BOLETO_PENDIENTE))
+                .Select(b => b.NumeroAsiento)
+                .ToListAsync();
+                
+            var asientosOcupados = new HashSet<int>();
+            foreach (var asientoStr in asientosOcupadosStr)
+            {
+                if (int.TryParse(asientoStr, out var seatNum))
+                    asientosOcupados.Add(seatNum);
+            }
+                
+            int siguienteAsiento = 1;
+
+            foreach (var pasajero in dto.Pasajeros)
+            {
+                // Encontrar siguiente asiento libre
+                while (asientosOcupados.Contains(siguienteAsiento))
+                    siguienteAsiento++;
+                
+                asientosOcupados.Add(siguienteAsiento); // Reservarlo para la siguiente iteración
+
+                decimal subtotal = precioBase + cargoServicio - descuentoUnitario;
+                if (subtotal < 0) subtotal = 0;
+                
+                decimal iva = subtotal * 0.16m;
+                decimal precioTotal = subtotal + iva;
+                montoTotalPago += precioTotal;
+
+                var boleto = new Boleto
+                {
+                    ViajeID = dto.ViajeID,
+                    ClienteID = userId,
+                    CodigoBoleto = GenerarCodigoBoleto(),
+                    NumeroAsiento = siguienteAsiento.ToString(),
+                    NombrePasajero = pasajero.NombrePasajero,
+                    EmailPasajero = pasajero.EmailPasajero,
+                    TelefonoPasajero = pasajero.TelefonoPasajero,
+                    PrecioBase = precioBase,
+                    CargoServicio = cargoServicio,
+                    Descuento = descuentoUnitario,
+                    IVA = iva,
+                    PrecioTotal = precioTotal,
+                    Estatus = ESTATUS_BOLETO_PENDIENTE,
+                    FechaCompra = DateTime.Now,
+                    ParadaAbordajeID = dto.ParadaAbordajeID,
+                    CuponAplicadoID = cuponId
+                };
+                
+                boleto.CodigoQR = GenerarCodigoQR(boleto.CodigoBoleto);
+                
+                _context.Boletos.Add(boleto);
+                boletosCreados.Add(boleto);
+            }
+
+            // 6. Crear Registro de Pago
+            var pago = new Pago
+            {
+                UsuarioID = userId,
+                CodigoPago = GenerarCodigoPago(),
+                Monto = montoTotalPago,
+                FechaPago = DateTime.Now,
+                Estatus = ESTATUS_PAGO_PENDIENTE,
+                MetodoPago = "Tarjeta", // Default por ahora
+                Proveedor = "Stripe" // Default
+            };
+            
+            _context.Pagos.Add(pago);
+            await _context.SaveChangesAsync(); // Guardar para obtener IDs
+
+            // 7. Vincular Pagos y Boletos
+            foreach (var boleto in boletosCreados)
+            {
+                _context.PagosBoletos.Add(new PagoBoleto
+                {
+                    PagoID = pago.PagoID,
+                    BoletoID = boleto.BoletoID,
+                    MontoAsignado = boleto.PrecioTotal
+                });
+            }
+
+            // 8. Actualizar Disponibilidad (Reservar)
+            viaje.AsientosDisponibles -= boletosCreados.Count;
+            
+            await _context.SaveChangesAsync();
+            await transaction.CommitAsync();
+
+            return Ok(new 
+            { 
+                success = true,
+                message = "Reserva iniciada correctamente",
+                codigoPago = pago.CodigoPago,
+                montoTotal = montoTotalPago,
+                cantidadBoletos = boletosCreados.Count,
+                boletos = boletosCreados.Select(b => b.CodigoBoleto)
+            });
+        }
+        catch (Exception ex)
+        {
+            await transaction.RollbackAsync();
+            _logger.LogError(ex, "Error al iniciar compra de boletos");
+            return StatusCode(500, new { message = "Error al procesar la solicitud de compra" });
+        }
+    }
     /// GET /api/boletos/{id}
     /// </summary>
     [HttpGet("{id}")]

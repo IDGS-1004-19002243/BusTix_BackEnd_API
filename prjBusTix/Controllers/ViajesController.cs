@@ -118,6 +118,102 @@ public class ViajesController : ControllerBase
     }
 
     /// <summary>
+    /// Obtener los viajes asignados al usuario actual (Chofer o Staff)
+    /// GET /api/viajes/mis-viajes
+    /// </summary>
+    [HttpGet("mis-viajes")]
+    public async Task<ActionResult<IEnumerable<ViajeResponseDto>>> GetMisViajes()
+    {
+        try
+        {
+            var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (string.IsNullOrEmpty(userId))
+                return Unauthorized();
+
+            // Determinar si es chofer o staff (o ambos)
+            // Buscamos viajes donde sea chofer
+            var viajesComoChofer = await _context.Viajes
+                .Include(v => v.Evento)
+                .Include(v => v.PlantillaRuta)
+                .Include(v => v.Unidad)
+                .Include(v => v.Chofer)
+                .Include(v => v.EstatusNavigation)
+                .Include(v => v.Paradas)
+                .Include(v => v.Staff)
+                .Include(v => v.Incidencias)
+                .Where(v => v.ChoferID == userId)
+                .ToListAsync();
+
+            // Buscamos viajes donde sea staff
+            var viajesComoStaff = await _context.ViajesStaff
+                .Include(vs => vs.Viaje)
+                    .ThenInclude(v => v.Evento)
+                .Include(vs => vs.Viaje)
+                    .ThenInclude(v => v.PlantillaRuta)
+                .Include(vs => vs.Viaje)
+                    .ThenInclude(v => v.Unidad)
+                .Include(vs => vs.Viaje)
+                    .ThenInclude(v => v.Chofer)
+                .Include(vs => vs.Viaje)
+                    .ThenInclude(v => v.EstatusNavigation)
+                .Include(vs => vs.Viaje)
+                    .ThenInclude(v => v.Paradas)
+                .Include(vs => vs.Viaje)
+                    .ThenInclude(v => v.Staff)
+                .Include(vs => vs.Viaje)
+                    .ThenInclude(v => v.Incidencias)
+                .Where(vs => vs.StaffID == userId)
+                .Select(vs => vs.Viaje)
+                .ToListAsync();
+
+            // Unir y eliminar duplicados
+            var todosMisViajes = viajesComoChofer
+                .Union(viajesComoStaff)
+                .OrderBy(v => v.FechaSalida)
+                .Select(v => new ViajeResponseDto
+                {
+                    ViajeID = v.ViajeID,
+                    CodigoViaje = v.CodigoViaje,
+                    TipoViaje = v.TipoViaje,
+                    EventoID = v.EventoID,
+                    EventoNombre = v.Evento.Nombre,
+                    EventoFecha = v.Evento.Fecha,
+                    PlantillaRutaID = v.PlantillaRutaID,
+                    RutaNombre = v.PlantillaRuta.NombreRuta,
+                    CiudadOrigen = v.PlantillaRuta.CiudadOrigen,
+                    CiudadDestino = v.PlantillaRuta.CiudadDestino,
+                    UnidadID = v.UnidadID,
+                    UnidadPlacas = v.Unidad != null ? v.Unidad.Placas : null,
+                    UnidadModelo = v.Unidad != null ? v.Unidad.Modelo : null,
+                    ChoferID = v.ChoferID,
+                    ChoferNombre = v.Chofer != null ? v.Chofer.NombreCompleto : null,
+                    FechaSalida = v.FechaSalida,
+                    FechaLlegadaEstimada = v.FechaLlegadaEstimada,
+                    CupoTotal = v.CupoTotal,
+                    AsientosDisponibles = v.AsientosDisponibles,
+                    AsientosVendidos = v.AsientosVendidos,
+                    PrecioBase = v.PrecioBase,
+                    CargoServicio = v.CargoServicio,
+                    VentasAbiertas = v.VentasAbiertas,
+                    Estatus = v.Estatus,
+                    EstatusNombre = v.EstatusNavigation.Nombre,
+                    FechaCreacion = v.FechaCreacion,
+                    TotalParadas = v.Paradas.Count,
+                    TotalStaff = v.Staff.Count,
+                    TotalIncidencias = v.Incidencias.Count
+                })
+                .ToList();
+
+            return Ok(todosMisViajes);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error al obtener mis viajes");
+            return StatusCode(500, new { message = "Error al obtener mis viajes", error = ex.Message });
+        }
+    }
+
+    /// <summary>
     /// Obtener un viaje por ID
     /// </summary>
     [HttpGet("{id}")]
@@ -865,367 +961,7 @@ public class ViajesController : ControllerBase
         }
     }
     
-    /// <summary>
-    /// Asignar staff a un viaje
-    /// POST /api/viajes/{id}/staff
-    /// </summary>
-    [HttpPost("{id}/staff")]
-    [ClRequirePermission(ClAppPermissions.ViajesUpdate)]
-    public async Task<ActionResult<StaffViajeResponseDto>> AsignarStaff(int id, [FromBody] AsignarStaffViajeDto dto)
-    {
-        try
-        {
-            var viaje = await _context.Viajes.FindAsync(id);
-            if (viaje == null)
-                return NotFound(new { message = "Viaje no encontrado" });
-            
-            // Validar que el viaje no haya salido
-            if (viaje.FechaSalida < DateTime.Now)
-                return BadRequest(new { message = "No se puede asignar staff a un viaje que ya salió" });
-            
-            // Validar que el staff existe y está activo
-            var staff = await _context.Users.FindAsync(dto.StaffID);
-            if (staff == null || staff.Estatus != 1)
-                return BadRequest(new { message = "El staff especificado no existe o no está activo" });
-            
-            // Verificar que el staff no esté ya asignado al mismo viaje
-            var yaAsignado = await _context.ViajesStaff
-                .AnyAsync(vs => vs.ViajeID == id && vs.StaffID == dto.StaffID);
-            
-            if (yaAsignado)
-                return BadRequest(new { message = "Este staff ya está asignado a este viaje" });
-            
-            // Crear asignación
-            var asignacion = new ViajeStaff
-            {
-                ViajeID = id,
-                StaffID = dto.StaffID,
-                RolEnViaje = dto.RolEnViaje,
-                FechaAsignacion = DateTime.Now,
-                Observaciones = dto.Observaciones
-            };
-            
-            _context.ViajesStaff.Add(asignacion);
-            await _context.SaveChangesAsync();
-            
-            // Preparar respuesta
-            var response = new StaffViajeResponseDto
-            {
-                AsignacionID = asignacion.AsignacionID,
-                ViajeID = asignacion.ViajeID,
-                StaffID = asignacion.StaffID,
-                StaffNombre = staff.NombreCompleto,
-                StaffEmail = staff.Email,
-                StaffTelefono = staff.PhoneNumber,
-                RolEnViaje = asignacion.RolEnViaje,
-                FechaAsignacion = asignacion.FechaAsignacion,
-                Observaciones = asignacion.Observaciones
-            };
-            
-            _logger.LogInformation("Staff {StaffID} asignado al viaje {ViajeID} como {Rol}", 
-                dto.StaffID, id, dto.RolEnViaje);
-            
-            return CreatedAtAction(nameof(GetStaffDeViaje), new { id }, response);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error al asignar staff al viaje {ViajeID}", id);
-            return StatusCode(500, new { message = "Error al asignar staff", error = ex.Message });
-        }
-    }
-    
-    /// <summary>
-    /// Obtener staff asignado a un viaje
-    /// GET /api/viajes/{id}/staff
-    /// </summary>
-    [HttpGet("{id}/staff")]
-    [ClRequirePermission(ClAppPermissions.ViajesView)]
-    public async Task<ActionResult<IEnumerable<StaffViajeResponseDto>>> GetStaffDeViaje(int id)
-    {
-        try
-        {
-            var viaje = await _context.Viajes.FindAsync(id);
-            if (viaje == null)
-                return NotFound(new { message = "Viaje no encontrado" });
-            
-            var staff = await _context.ViajesStaff
-                .Include(vs => vs.Staff)
-                .Where(vs => vs.ViajeID == id)
-                .OrderBy(vs => vs.FechaAsignacion)
-                .Select(vs => new StaffViajeResponseDto
-                {
-                    AsignacionID = vs.AsignacionID,
-                    ViajeID = vs.ViajeID,
-                    StaffID = vs.StaffID,
-                    StaffNombre = vs.Staff.NombreCompleto,
-                    StaffEmail = vs.Staff.Email,
-                    StaffTelefono = vs.Staff.PhoneNumber,
-                    RolEnViaje = vs.RolEnViaje,
-                    FechaAsignacion = vs.FechaAsignacion,
-                    Observaciones = vs.Observaciones
-                })
-                .ToListAsync();
-            
-            return Ok(staff);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error al obtener staff del viaje {ViajeID}", id);
-            return StatusCode(500, new { message = "Error al obtener staff", error = ex.Message });
-        }
-    }
-    
-    /// <summary>
-    /// Desasignar staff de un viaje
-    /// DELETE /api/viajes/{viajeId}/staff/{asignacionId}
-    /// </summary>
-    [HttpDelete("{viajeId}/staff/{asignacionId}")]
-    [ClRequirePermission(ClAppPermissions.ViajesUpdate)]
-    public async Task<ActionResult> DesasignarStaff(int viajeId, int asignacionId)
-    {
-        try
-        {
-            var asignacion = await _context.ViajesStaff
-                .FirstOrDefaultAsync(vs => vs.AsignacionID == asignacionId && vs.ViajeID == viajeId);
-            
-            if (asignacion == null)
-                return NotFound(new { message = "Asignación no encontrada" });
-            
-            // Validar que el viaje no haya salido
-            var viaje = await _context.Viajes.FindAsync(viajeId);
-            if (viaje != null && viaje.FechaSalida < DateTime.Now)
-                return BadRequest(new { message = "No se puede desasignar staff de un viaje que ya salió" });
-            
-            _context.ViajesStaff.Remove(asignacion);
-            await _context.SaveChangesAsync();
-            
-            _logger.LogInformation("Staff desasignado del viaje {ViajeID}: AsignacionID {AsignacionID}", 
-                viajeId, asignacionId);
-            
-            return Ok(new { message = "Staff desasignado correctamente" });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error al desasignar staff del viaje {ViajeID}", viajeId);
-            return StatusCode(500, new { message = "Error al desasignar staff", error = ex.Message });
-        }
-    }
-    
-    /// <summary>
-    /// Obtener viajes asignados a un staff
-    /// GET /api/viajes/mis-viajes
-    /// </summary>
-    [HttpGet("mis-viajes")]
-    [Authorize(Roles = "Staff,Chofer,Manager")]
-    public async Task<ActionResult> GetMisViajes(
-        [FromQuery] DateTime? fechaDesde,
-        [FromQuery] DateTime? fechaHasta,
-        [FromQuery] bool? soloProximos = true)
-    {
-        try
-        {
-            var staffId = User.FindFirstValue(ClaimTypes.NameIdentifier);
-            
-            var query = _context.ViajesStaff
-                .Include(vs => vs.Viaje)
-                    .ThenInclude(v => v.Evento)
-                .Include(vs => vs.Viaje)
-                    .ThenInclude(v => v.PlantillaRuta)
-                .Include(vs => vs.Viaje)
-                    .ThenInclude(v => v.Unidad)
-                .Include(vs => vs.Viaje)
-                    .ThenInclude(v => v.EstatusNavigation)
-                .Where(vs => vs.StaffID == staffId)
-                .AsQueryable();
-            
-            if (fechaDesde.HasValue)
-                query = query.Where(vs => vs.Viaje.FechaSalida >= fechaDesde.Value);
-            
-            if (fechaHasta.HasValue)
-                query = query.Where(vs => vs.Viaje.FechaSalida <= fechaHasta.Value);
-            
-            if (soloProximos == true)
-                query = query.Where(vs => vs.Viaje.FechaSalida >= DateTime.Now);
-            
-            var viajes = await query
-                .OrderBy(vs => vs.Viaje.FechaSalida)
-                .Select(vs => new
-                {
-                    asignacionID = vs.AsignacionID,
-                    rolEnViaje = vs.RolEnViaje,
-                    fechaAsignacion = vs.FechaAsignacion,
-                    viaje = new
-                    {
-                        vs.Viaje.ViajeID,
-                        vs.Viaje.CodigoViaje,
-                        vs.Viaje.TipoViaje,
-                        eventoNombre = vs.Viaje.Evento.Nombre,
-                        rutaNombre = vs.Viaje.PlantillaRuta.NombreRuta,
-                        ciudadOrigen = vs.Viaje.PlantillaRuta.CiudadOrigen,
-                        ciudadDestino = vs.Viaje.PlantillaRuta.CiudadDestino,
-                        vs.Viaje.FechaSalida,
-                        vs.Viaje.FechaLlegadaEstimada,
-                        unidadPlacas = vs.Viaje.Unidad != null ? vs.Viaje.Unidad.Placas : null,
-                        vs.Viaje.CupoTotal,
-                        vs.Viaje.AsientosVendidos,
-                        vs.Viaje.AsientosDisponibles,
-                        estatus = vs.Viaje.EstatusNavigation.Nombre
-                    }
-                })
-                .ToListAsync();
-            
-            return Ok(new
-            {
-                success = true,
-                data = viajes,
-                total = viajes.Count
-            });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error al obtener viajes del staff");
-            return StatusCode(500, new { message = "Error al obtener viajes", error = ex.Message });
-        }
-    }
-    
-    /// <summary>
-    /// Verificar disponibilidad de unidad, chofer o staff
-    /// GET /api/viajes/verificar-disponibilidad
-    /// </summary>
-    [HttpGet("verificar-disponibilidad")]
-    [ClRequirePermission(ClAppPermissions.ViajesView)]
-    public async Task<ActionResult<DisponibilidadResponseDto>> VerificarDisponibilidad(
-        [FromQuery] DateTime fechaInicio,
-        [FromQuery] DateTime? fechaFin,
-        [FromQuery] int? unidadId,
-        [FromQuery] string? choferId,
-        [FromQuery] string? staffId)
-    {
-        if (fechaInicio == default)
-            return BadRequest(new { message = "fechaInicio es requerido" });
-        var fin = fechaFin ?? fechaInicio.AddHours(4);
-
-        if (unidadId.HasValue)
-        {
-            var unidad = await _context.Unidades.FindAsync(unidadId.Value);
-            if (unidad == null || unidad.Estatus != 1)
-                return BadRequest(new { message = "Unidad no existe o no está activa" });
-            var r = await ValidarDisponibilidadUnidad(unidadId.Value, fechaInicio, fin);
-            return Ok(r);
-        }
-        if (!string.IsNullOrEmpty(choferId))
-        {
-            var chofer = await _context.Users.FindAsync(choferId);
-            if (chofer == null || chofer.Estatus != 1)
-                return BadRequest(new { message = "Chofer no existe o no está activo" });
-            var r = await ValidarDisponibilidadChofer(choferId, fechaInicio, fin);
-            return Ok(r);
-        }
-        if (!string.IsNullOrEmpty(staffId))
-        {
-            var staff = await _context.Users.FindAsync(staffId);
-            if (staff == null || staff.Estatus != 1)
-                return BadRequest(new { message = "Staff no existe o no está activo" });
-            var r = await ValidarDisponibilidadStaff(staffId, fechaInicio, fin);
-            return Ok(r);
-        }
-        return BadRequest(new { message = "Debe especificar unidadId, choferId o staffId" });
-    }
-    
-    // ===== MÉTODOS PRIVADOS AUXILIARES =====
-    
-    private async Task<DisponibilidadResponseDto> ValidarDisponibilidadChofer(string choferId, DateTime desde, DateTime hasta)
-    {
-        var conflictos = await _context.Viajes
-            .Include(v => v.Evento)
-            .Include(v => v.PlantillaRuta)
-            .Where(v => v.ChoferID == choferId &&
-                       ((v.FechaSalida >= desde && v.FechaSalida <= hasta) ||
-                        (v.FechaLlegadaEstimada.HasValue && v.FechaLlegadaEstimada.Value >= desde && v.FechaLlegadaEstimada.Value <= hasta) ||
-                        (v.FechaSalida <= desde && v.FechaLlegadaEstimada.HasValue && v.FechaLlegadaEstimada.Value >= hasta)))
-            .Select(v => new ConflictoDto
-            {
-                ViajeID = v.ViajeID,
-                CodigoViaje = v.CodigoViaje,
-                FechaSalida = v.FechaSalida,
-                FechaLlegadaEstimada = v.FechaLlegadaEstimada,
-                EventoNombre = v.Evento.Nombre,
-                RutaNombre = v.PlantillaRuta.NombreRuta
-            })
-            .ToListAsync();
-        
-        return new DisponibilidadResponseDto
-        {
-            EstaDisponible = !conflictos.Any(),
-            Mensaje = conflictos.Any() 
-                ? $"El chofer tiene {conflictos.Count} conflicto(s) de horario" 
-                : "El chofer está disponible",
-            Conflictos = conflictos
-        };
-    }
-    
-    private async Task<DisponibilidadResponseDto> ValidarDisponibilidadUnidad(int unidadId, DateTime desde, DateTime hasta)
-    {
-        var conflictos = await _context.Viajes
-            .Include(v => v.Evento)
-            .Include(v => v.PlantillaRuta)
-            .Where(v => v.UnidadID == unidadId &&
-                       ((v.FechaSalida >= desde && v.FechaSalida <= hasta) ||
-                        (v.FechaLlegadaEstimada.HasValue && v.FechaLlegadaEstimada.Value >= desde && v.FechaLlegadaEstimada.Value <= hasta) ||
-                        (v.FechaSalida <= desde && v.FechaLlegadaEstimada.HasValue && v.FechaLlegadaEstimada.Value >= hasta)))
-            .Select(v => new ConflictoDto
-            {
-                ViajeID = v.ViajeID,
-                CodigoViaje = v.CodigoViaje,
-                FechaSalida = v.FechaSalida,
-                FechaLlegadaEstimada = v.FechaLlegadaEstimada,
-                EventoNombre = v.Evento.Nombre,
-                RutaNombre = v.PlantillaRuta.NombreRuta
-            })
-            .ToListAsync();
-        
-        return new DisponibilidadResponseDto
-        {
-            EstaDisponible = !conflictos.Any(),
-            Mensaje = conflictos.Any() 
-                ? $"La unidad tiene {conflictos.Count} conflicto(s) de horario" 
-                : "La unidad está disponible",
-            Conflictos = conflictos
-        };
-    }
-    
-    private async Task<DisponibilidadResponseDto> ValidarDisponibilidadStaff(string staffId, DateTime desde, DateTime? hasta)
-    {
-        var hastaDate = hasta ?? desde.AddDays(1);
-        
-        var conflictos = await _context.ViajesStaff
-            .Include(vs => vs.Viaje)
-                .ThenInclude(v => v.Evento)
-            .Include(vs => vs.Viaje)
-                .ThenInclude(v => v.PlantillaRuta)
-            .Where(vs => vs.StaffID == staffId &&
-                        ((vs.Viaje.FechaSalida >= desde && vs.Viaje.FechaSalida <= hastaDate) ||
-                         (vs.Viaje.FechaLlegadaEstimada.HasValue && vs.Viaje.FechaLlegadaEstimada.Value >= desde && vs.Viaje.FechaLlegadaEstimada.Value <= hastaDate) ||
-                         (vs.Viaje.FechaSalida <= desde && vs.Viaje.FechaLlegadaEstimada.HasValue && vs.Viaje.FechaLlegadaEstimada.Value >= hastaDate)))
-            .Select(vs => new ConflictoDto
-            {
-                ViajeID = vs.Viaje.ViajeID,
-                CodigoViaje = vs.Viaje.CodigoViaje,
-                FechaSalida = vs.Viaje.FechaSalida,
-                FechaLlegadaEstimada = vs.Viaje.FechaLlegadaEstimada,
-                EventoNombre = vs.Viaje.Evento.Nombre,
-                RutaNombre = vs.Viaje.PlantillaRuta.NombreRuta
-            })
-            .ToListAsync();
-        
-        return new DisponibilidadResponseDto
-        {
-            EstaDisponible = !conflictos.Any(),
-            Mensaje = conflictos.Any() 
-                ? $"El staff tiene {conflictos.Count} conflicto(s) de horario" 
-                : "El staff está disponible",
-            Conflictos = conflictos
-        };
-    }
+    // NOTE: Las operaciones relacionadas con staff de un viaje (POST/GET/DELETE /api/viajes/{viajeId}/staff)
+    // están implementadas de forma dedicada en `ViajeStaffController`. Para evitar rutas duplicadas y
+    // conflictos de enrutamiento, no implementamos esas acciones aquí. Use `ViajeStaffController`.
 }
-
