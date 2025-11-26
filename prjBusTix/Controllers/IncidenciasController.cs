@@ -897,6 +897,303 @@ public class IncidenciasController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Obtener todos los tipos de incidencia incluyendo inactivos (solo Admin)
+    /// GET: api/incidencias/tipos/todos
+    /// </summary>
+    [HttpGet("tipos/todos")]
+    [ClRequirePermission(ClAppPermissions.IncidenciasManage)]
+    [ProducesResponseType(typeof(List<TipoIncidenciaDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult> GetTodosLosTiposIncidencia()
+    {
+        try
+        {
+            var tipos = await _context.TipoIncidencia
+                .Select(t => new TipoIncidenciaDto
+                {
+                    TipoIncidenciaID = t.TipoIncidenciaID,
+                    Codigo = t.Codigo,
+                    Nombre = t.Nombre,
+                    Categoria = t.Categoria,
+                    Prioridad = t.Prioridad,
+                    EsActivo = t.EsActivo
+                })
+                .OrderBy(t => t.Categoria)
+                .ThenBy(t => t.Nombre)
+                .ToListAsync();
+
+            return Ok(new
+            {
+                success = true,
+                data = tipos,
+                total = tipos.Count
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error al obtener todos los tipos de incidencia");
+            return StatusCode(500, new
+            {
+                success = false,
+                message = "Error al obtener todos los tipos de incidencia",
+                error = ex.Message
+            });
+        }
+    }
+
+    /// <summary>
+    /// Crear un nuevo tipo de incidencia
+    /// POST: api/incidencias/tipos
+    /// </summary>
+    [HttpPost("tipos")]
+    [ClRequirePermission(ClAppPermissions.IncidenciasManage)]
+    [ProducesResponseType(typeof(TipoIncidenciaDto), StatusCodes.Status201Created)]
+    public async Task<ActionResult> CrearTipoIncidencia([FromBody] CrearTipoIncidenciaDto dto)
+    {
+        try
+        {
+            // Validar que el código no exista
+            var existeCodigo = await _context.TipoIncidencia
+                .AnyAsync(t => t.Codigo == dto.Codigo);
+
+            if (existeCodigo)
+            {
+                return BadRequest(new
+                {
+                    success = false,
+                    message = $"Ya existe un tipo de incidencia con el código '{dto.Codigo}'"
+                });
+            }
+
+            // Validar que el nombre no exista
+            var existeNombre = await _context.TipoIncidencia
+                .AnyAsync(t => t.Nombre == dto.Nombre);
+
+            if (existeNombre)
+            {
+                return BadRequest(new
+                {
+                    success = false,
+                    message = $"Ya existe un tipo de incidencia con el nombre '{dto.Nombre}'"
+                });
+            }
+
+            var tipoIncidencia = new TipoIncidencia
+            {
+                Codigo = dto.Codigo,
+                Nombre = dto.Nombre,
+                Categoria = dto.Categoria,
+                Prioridad = dto.Prioridad,
+                EsActivo = true
+            };
+
+            _context.TipoIncidencia.Add(tipoIncidencia);
+            await _context.SaveChangesAsync();
+
+            var response = new TipoIncidenciaDto
+            {
+                TipoIncidenciaID = tipoIncidencia.TipoIncidenciaID,
+                Codigo = tipoIncidencia.Codigo,
+                Nombre = tipoIncidencia.Nombre,
+                Categoria = tipoIncidencia.Categoria,
+                Prioridad = tipoIncidencia.Prioridad,
+                EsActivo = tipoIncidencia.EsActivo
+            };
+
+            _logger.LogInformation(
+                "Tipo de incidencia '{Nombre}' creado con ID {TipoIncidenciaID}",
+                tipoIncidencia.Nombre,
+                tipoIncidencia.TipoIncidenciaID
+            );
+
+            return CreatedAtAction(
+                nameof(GetTiposIncidencia),
+                new { id = tipoIncidencia.TipoIncidenciaID },
+                new { success = true, data = response }
+            );
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error al crear tipo de incidencia");
+            return StatusCode(500, new
+            {
+                success = false,
+                message = "Error al crear tipo de incidencia",
+                error = ex.Message
+            });
+        }
+    }
+
+    /// <summary>
+    /// Actualizar un tipo de incidencia existente
+    /// PUT: api/incidencias/tipos/{id}
+    /// </summary>
+    [HttpPut("tipos/{id}")]
+    [ClRequirePermission(ClAppPermissions.IncidenciasManage)]
+    [ProducesResponseType(typeof(TipoIncidenciaDto), StatusCodes.Status200OK)]
+    public async Task<ActionResult> ActualizarTipoIncidencia(int id, [FromBody] ActualizarTipoIncidenciaDto dto)
+    {
+        try
+        {
+            var tipoIncidencia = await _context.TipoIncidencia.FindAsync(id);
+
+            if (tipoIncidencia == null)
+            {
+                return NotFound(new
+                {
+                    success = false,
+                    message = "Tipo de incidencia no encontrado"
+                });
+            }
+
+            // Validar código único si se está actualizando
+            if (!string.IsNullOrEmpty(dto.Codigo) && dto.Codigo != tipoIncidencia.Codigo)
+            {
+                var existeCodigo = await _context.TipoIncidencia
+                    .AnyAsync(t => t.Codigo == dto.Codigo && t.TipoIncidenciaID != id);
+
+                if (existeCodigo)
+                {
+                    return BadRequest(new
+                    {
+                        success = false,
+                        message = $"Ya existe otro tipo de incidencia con el código '{dto.Codigo}'"
+                    });
+                }
+                tipoIncidencia.Codigo = dto.Codigo;
+            }
+
+            // Validar nombre único si se está actualizando
+            if (!string.IsNullOrEmpty(dto.Nombre) && dto.Nombre != tipoIncidencia.Nombre)
+            {
+                var existeNombre = await _context.TipoIncidencia
+                    .AnyAsync(t => t.Nombre == dto.Nombre && t.TipoIncidenciaID != id);
+
+                if (existeNombre)
+                {
+                    return BadRequest(new
+                    {
+                        success = false,
+                        message = $"Ya existe otro tipo de incidencia con el nombre '{dto.Nombre}'"
+                    });
+                }
+                tipoIncidencia.Nombre = dto.Nombre;
+            }
+
+            // Actualizar otros campos si se proporcionan
+            if (dto.Categoria != null)
+                tipoIncidencia.Categoria = dto.Categoria;
+
+            if (dto.Prioridad != null)
+                tipoIncidencia.Prioridad = dto.Prioridad;
+
+            if (dto.EsActivo.HasValue)
+                tipoIncidencia.EsActivo = dto.EsActivo.Value;
+
+            await _context.SaveChangesAsync();
+
+            var response = new TipoIncidenciaDto
+            {
+                TipoIncidenciaID = tipoIncidencia.TipoIncidenciaID,
+                Codigo = tipoIncidencia.Codigo,
+                Nombre = tipoIncidencia.Nombre,
+                Categoria = tipoIncidencia.Categoria,
+                Prioridad = tipoIncidencia.Prioridad,
+                EsActivo = tipoIncidencia.EsActivo
+            };
+
+            _logger.LogInformation(
+                "Tipo de incidencia {TipoIncidenciaID} actualizado",
+                id
+            );
+
+            return Ok(new { success = true, data = response });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error al actualizar tipo de incidencia {TipoIncidenciaID}", id);
+            return StatusCode(500, new
+            {
+                success = false,
+                message = "Error al actualizar tipo de incidencia",
+                error = ex.Message
+            });
+        }
+    }
+
+    /// <summary>
+    /// Desactivar un tipo de incidencia (soft delete)
+    /// DELETE: api/incidencias/tipos/{id}
+    /// </summary>
+    [HttpDelete("tipos/{id}")]
+    [ClRequirePermission(ClAppPermissions.IncidenciasManage)]
+    public async Task<ActionResult> EliminarTipoIncidencia(int id)
+    {
+        try
+        {
+            var tipoIncidencia = await _context.TipoIncidencia.FindAsync(id);
+
+            if (tipoIncidencia == null)
+            {
+                return NotFound(new
+                {
+                    success = false,
+                    message = "Tipo de incidencia no encontrado"
+                });
+            }
+
+            // Verificar si hay incidencias usando este tipo
+            var incidenciasUsandoTipo = await _context.Incidencias
+                .CountAsync(i => i.TipoIncidenciaID == id);
+
+            if (incidenciasUsandoTipo > 0)
+            {
+                // Soft delete: solo desactivar
+                tipoIncidencia.EsActivo = false;
+                await _context.SaveChangesAsync();
+
+                _logger.LogInformation(
+                    "Tipo de incidencia {TipoIncidenciaID} desactivado (tiene {Count} incidencias asociadas)",
+                    id,
+                    incidenciasUsandoTipo
+                );
+
+                return Ok(new
+                {
+                    success = true,
+                    message = $"Tipo de incidencia desactivado correctamente. Hay {incidenciasUsandoTipo} incidencia(s) que usan este tipo."
+                });
+            }
+            else
+            {
+                // Hard delete: eliminar completamente si no tiene incidencias asociadas
+                _context.TipoIncidencia.Remove(tipoIncidencia);
+                await _context.SaveChangesAsync();
+
+                _logger.LogInformation(
+                    "Tipo de incidencia {TipoIncidenciaID} eliminado completamente",
+                    id
+                );
+
+                return Ok(new
+                {
+                    success = true,
+                    message = "Tipo de incidencia eliminado correctamente"
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error al eliminar tipo de incidencia {TipoIncidenciaID}", id);
+            return StatusCode(500, new
+            {
+                success = false,
+                message = "Error al eliminar tipo de incidencia",
+                error = ex.Message
+            });
+        }
+    }
+
     #endregion
 
     #region Métodos Auxiliares Privados

@@ -30,6 +30,7 @@
         public const string IncidenciasView = "incidencias:view";
         public const string IncidenciasCreate = "incidencias:create";
         public const string IncidenciasUpdate = "incidencias:update";
+        public const string IncidenciasManage = "incidencias:manage"; // Para gestionar tipos de incidencia
 
         // ===== NOTIFICACIONES =====
         public const string NotificacionesView = "notificaciones:view";
@@ -82,7 +83,7 @@
                 ViajesView, ViajesCreate, ViajesUpdate, ViajesDelete,
                 BoletosView, BoletosCreate, BoletosValidate,
                 PagosView, PagosManage,
-                IncidenciasView, IncidenciasCreate, IncidenciasUpdate,
+                IncidenciasView, IncidenciasCreate, IncidenciasUpdate, IncidenciasManage,
                 NotificacionesView, NotificacionesCreate, NotificacionesBroadcast,
                 RutasView, RutasCreate, RutasUpdate, RutasDelete,
                 UnidadesView, UnidadesCreate, UnidadesUpdate, UnidadesDelete,
@@ -99,7 +100,7 @@
                 ViajesView, ViajesCreate, ViajesUpdate,
                 BoletosView, BoletosValidate,
                 PagosView,
-                IncidenciasView, IncidenciasUpdate,
+                IncidenciasView, IncidenciasUpdate, IncidenciasManage,
                 NotificacionesView, NotificacionesCreate, NotificacionesBroadcast,
                 RutasView,
                 UnidadesView,
