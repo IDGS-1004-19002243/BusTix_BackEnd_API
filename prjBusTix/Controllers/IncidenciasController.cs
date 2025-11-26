@@ -619,6 +619,88 @@ public class IncidenciasController : ControllerBase
                 "Incidencia {CodigoIncidencia} creada por el usuario {UserId}. Tipo: {TipoIncidenciaID}, Prioridad: {Prioridad}",
                 codigoIncidencia, userId, dto.TipoIncidenciaID, dto.Prioridad);
 
+            // --- 🔔 NOTIFICACIONES AUTOMÁTICAS DE NUEVA INCIDENCIA ---
+            try
+            {
+                // Obtener todos los administradores y managers para notificar
+                var rolesANotificar = new[] { "Admin", "Manager" };
+                var usuariosParaNotificar = new List<string>();
+
+                foreach (var role in rolesANotificar)
+                {
+                    var usersInRole = await _userManager.GetUsersInRoleAsync(role);
+                    usuariosParaNotificar.AddRange(usersInRole.Select(u => u.Id));
+                }
+
+                // Remover duplicados y al usuario que creó la incidencia
+                usuariosParaNotificar = usuariosParaNotificar
+                    .Distinct()
+                    .Where(id => id != userId)
+                    .ToList();
+
+                // Crear notificaciones
+                var notificaciones = new List<Notificacion>();
+                var mensajePrioridad = dto.Prioridad == "Alta" ? " ⚠️ PRIORIDAD ALTA" : 
+                                      dto.Prioridad == "Crítica" ? " 🚨 PRIORIDAD CRÍTICA" : "";
+
+                foreach (var adminId in usuariosParaNotificar)
+                {
+                    notificaciones.Add(new Notificacion
+                    {
+                        UsuarioID = adminId,
+                        Titulo = $"Nueva Incidencia Reportada{mensajePrioridad}",
+                        Mensaje = $"Incidencia {incidencia.CodigoIncidencia}: {incidencia.Titulo}. Tipo: {tipoIncidencia.Nombre}.",
+                        TipoNotificacion = "Incidencia",
+                        EnviarPush = dto.Prioridad is "Alta" or "Crítica",
+                        EnviarEmail = dto.Prioridad == "Crítica",
+                        FechaCreacion = DateTime.Now,
+                        FueEnviada = false
+                    });
+                }
+
+                if (notificaciones.Any())
+                {
+                    _context.Notificaciones.AddRange(notificaciones);
+                    await _context.SaveChangesAsync();
+
+                    var notifIds = notificaciones.Select(n => n.NotificacionID).ToList();
+
+                    // Enviar en background (Fire & Forget seguro)
+                    _ = Task.Run(async () =>
+                    {
+                        using var scope = _scopeFactory.CreateScope();
+                        var notifService = scope.ServiceProvider.GetRequiredService<INotificacionService>();
+                        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+                        foreach (var notifId in notifIds)
+                        {
+                            try
+                            {
+                                var notif = await dbContext.Notificaciones.FindAsync(notifId);
+                                if (notif != null)
+                                {
+                                    await notifService.EnviarNotificacionAsync(notif);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogError(ex, "Error enviando notificación de nueva incidencia {NotifId}", notifId);
+                            }
+                        }
+                    });
+
+                    _logger.LogInformation(
+                        "Se crearon {Count} notificaciones para la incidencia {CodigoIncidencia}",
+                        notificaciones.Count, codigoIncidencia);
+                }
+            }
+            catch (Exception ex)
+            {
+                // No fallar la creación de la incidencia si falla la notificación
+                _logger.LogError(ex, "Error al enviar notificaciones para la incidencia {CodigoIncidencia}", codigoIncidencia);
+            }
+            // --------------------------------------------------------
+
             // Cargar las relaciones para la respuesta
             await _context.Entry(incidencia).Reference(i => i.TipoIncidencia).LoadAsync();
             await _context.Entry(incidencia).Reference(i => i.Reportador).LoadAsync();

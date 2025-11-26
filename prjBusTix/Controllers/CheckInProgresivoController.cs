@@ -98,6 +98,14 @@ public class CheckInProgresivoController : ControllerBase
             var paradasCompletadas = estadosParadas.Count(e => e.Estado == "Completado");
             var paradaActual = estadosParadas.FirstOrDefault(e => e.Estado != "Completado")?.OrdenParada ?? viaje.Paradas.Count;
 
+            var totalAbordados = estadosParadas.Sum(e => e.TotalPasajerosAbordados);
+            var totalNoShow = estadosParadas.Sum(e => e.TotalPasajerosNoShow);
+            var totalEsperados = estadosParadas.Sum(e => e.TotalPasajerosEsperados);
+            var totalPendientes = totalEsperados - (totalAbordados + totalNoShow);
+            var porcentajeAvance = viaje.Paradas.Count > 0 
+                ? Math.Round((paradasCompletadas * 100.0) / viaje.Paradas.Count, 2) 
+                : 0;
+
             var progreso = new ProgresoViajeDto
             {
                 ViajeID = viajeId,
@@ -109,8 +117,8 @@ public class CheckInProgresivoController : ControllerBase
                 ParadaActual = paradaActual,
                 Paradas = estadosParadas,
                 TotalPasajerosViaje = viaje.CupoTotal,
-                TotalAbordados = estadosParadas.Sum(e => e.TotalPasajerosAbordados),
-                TotalNoShow = estadosParadas.Sum(e => e.TotalPasajerosNoShow)
+                TotalAbordados = totalAbordados,
+                TotalNoShow = totalNoShow
             };
 
             return Ok(progreso);
@@ -137,10 +145,14 @@ public class CheckInProgresivoController : ControllerBase
         int viajeId, 
         [FromBody] ConfirmarLlegadaParadaDto dto)
     {
-        using var transaction = await _context.Database.BeginTransactionAsync();
-        
-        try
+        var strategy = _context.Database.CreateExecutionStrategy();
+
+        return await strategy.ExecuteAsync<ActionResult<EstadoParadaResponseDto>>(async () =>
         {
+            using var transaction = await _context.Database.BeginTransactionAsync();
+            
+            try
+            {
             var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
             if (string.IsNullOrEmpty(userId))
                 return Unauthorized(new { message = "Usuario no autenticado" });
@@ -211,9 +223,12 @@ public class CheckInProgresivoController : ControllerBase
                     TipoNotificacion = "checkin_parada",
                     FechaCreacion = DateTime.Now,
                     FueLeida = false,
-                    ViajeID = viajeId
+                    FueEnviada = false,
+                    EnviarPush = true
                 };
                 
+                _context.Notificaciones.Add(notificacion);
+                await _context.SaveChangesAsync();
                 await _notificacionService.EnviarNotificacionAsync(notificacion);
             }
 
@@ -221,14 +236,15 @@ public class CheckInProgresivoController : ControllerBase
 
             var response = await MapearEstadoParada(estadoParada);
             return Ok(response);
-        }
-        catch (Exception ex)
-        {
-            await transaction.RollbackAsync();
-            _logger.LogError(ex, "Error al confirmar llegada a parada {ParadaId} del viaje {ViajeId}", 
-                dto.ParadaViajeID, viajeId);
-            return StatusCode(500, new { message = "Error al confirmar la llegada" });
-        }
+            }
+            catch (Exception ex)
+            {
+                await transaction.RollbackAsync();
+                _logger.LogError(ex, "Error al confirmar llegada a parada {ParadaId} del viaje {ViajeId}", 
+                    dto.ParadaViajeID, viajeId);
+                return StatusCode(500, new { message = "Error al confirmar la llegada" });
+            }
+        });
     }
 
     /// <summary>
@@ -309,10 +325,14 @@ public class CheckInProgresivoController : ControllerBase
         int viajeId,
         [FromBody] FinalizarValidacionParadaDto dto)
     {
-        using var transaction = await _context.Database.BeginTransactionAsync();
-        
-        try
+        var strategy = _context.Database.CreateExecutionStrategy();
+
+        return await strategy.ExecuteAsync<ActionResult<EstadoParadaResponseDto>>(async () =>
         {
+            using var transaction = await _context.Database.BeginTransactionAsync();
+            
+            try
+            {
             var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
             if (string.IsNullOrEmpty(userId))
                 return Unauthorized(new { message = "Usuario no autenticado" });
@@ -354,9 +374,12 @@ public class CheckInProgresivoController : ControllerBase
                     TipoNotificacion = "checkin_completado",
                     FechaCreacion = DateTime.Now,
                     FueLeida = false,
-                    ViajeID = viajeId
+                    FueEnviada = false,
+                    EnviarPush = true
                 };
                 
+                _context.Notificaciones.Add(notificacion);
+                await _context.SaveChangesAsync();
                 await _notificacionService.EnviarNotificacionAsync(notificacion);
             }
 
@@ -364,14 +387,15 @@ public class CheckInProgresivoController : ControllerBase
 
             var response = await MapearEstadoParada(estadoParada);
             return Ok(response);
-        }
-        catch (Exception ex)
-        {
-            await transaction.RollbackAsync();
-            _logger.LogError(ex, "Error al finalizar validación en parada {ParadaId} del viaje {ViajeId}", 
-                dto.ParadaViajeID, viajeId);
-            return StatusCode(500, new { message = "Error al finalizar la validación" });
-        }
+            }
+            catch (Exception ex)
+            {
+                await transaction.RollbackAsync();
+                _logger.LogError(ex, "Error al finalizar validación en parada {ParadaId} del viaje {ViajeId}", 
+                    dto.ParadaViajeID, viajeId);
+                return StatusCode(500, new { message = "Error al finalizar la validación" });
+            }
+        });
     }
 
     #region Métodos Auxiliares

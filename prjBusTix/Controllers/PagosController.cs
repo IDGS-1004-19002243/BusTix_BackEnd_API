@@ -43,10 +43,14 @@ public class PagosController : ControllerBase
     [AllowAnonymous] // Permitir llamadas desde webhook
     public async Task<IActionResult> ConfirmarPago([FromBody] ConfirmacionPagoDto dto)
     {
-        using var transaction = await _context.Database.BeginTransactionAsync();
-        
-        try
+        var strategy = _context.Database.CreateExecutionStrategy();
+
+        return await strategy.ExecuteAsync<IActionResult>(async () =>
         {
+            using var transaction = await _context.Database.BeginTransactionAsync();
+        
+            try
+            {
             // Buscar el pago por código
             var pago = await _context.Pagos
                 .Include(p => p.PagosBoletos)
@@ -178,6 +182,7 @@ public class PagosController : ControllerBase
             _logger.LogError(ex, "Error al confirmar pago {CodigoPago}", dto.CodigoPago);
             return StatusCode(500, new { message = "Error al procesar la confirmación del pago" });
         }
+        });
     }
     
     /// <summary>

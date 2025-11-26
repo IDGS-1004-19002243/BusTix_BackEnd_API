@@ -9,7 +9,7 @@ namespace prjBusTix.Controllers;
 [ApiController]
 [Route("api/[controller]")]
 [Authorize]
-public class ReportesController : ControllerBase
+public partial class ReportesController : ControllerBase
 {
     private readonly AppDbContext _context;
     private readonly ILogger<ReportesController> _logger;
@@ -44,20 +44,21 @@ public class ReportesController : ControllerBase
             if (eventoId.HasValue)
                 query = query.Where(b => b.Viaje.EventoID == eventoId.Value);
 
-            // 1. Totales Generales (Ejecutado en BD)
-            var stats = await query
-                .GroupBy(b => 1)
-                .Select(g => new
-                {
-                    TotalBoletos = g.Count(),
-                    BoletosVendidos = g.Count(b => b.Estatus == 10 || b.Estatus == 11),
-                    BoletosCancelados = g.Count(b => b.Estatus == 12),
-                    IngresoTotal = g.Where(b => b.Estatus == 10 || b.Estatus == 11).Sum(b => (decimal?)b.PrecioTotal) ?? 0,
-                    IngresoBase = g.Where(b => b.Estatus == 10 || b.Estatus == 11).Sum(b => (decimal?)b.PrecioBase) ?? 0,
-                    Descuentos = g.Where(b => b.Estatus == 10 || b.Estatus == 11).Sum(b => (decimal?)b.Descuento) ?? 0,
-                    Cargos = g.Where(b => b.Estatus == 10 || b.Estatus == 11).Sum(b => (decimal?)b.CargoServicio) ?? 0
-                })
-                .FirstOrDefaultAsync();
+            // Constantes para estatus de boletos
+            const int ESTATUS_BOLETO_PAGADO = 10;
+            const int ESTATUS_BOLETO_USADO = 11;
+            const int ESTATUS_BOLETO_CANCELADO = 12;
+
+            // 1. Totales Generales (Ejecutado en BD) - Sin GroupBy para manejar resultados vacíos
+            var totalBoletos = await query.CountAsync();
+            var boletosVendidos = await query.CountAsync(b => b.Estatus == ESTATUS_BOLETO_PAGADO || b.Estatus == ESTATUS_BOLETO_USADO);
+            var boletosCancelados = await query.CountAsync(b => b.Estatus == ESTATUS_BOLETO_CANCELADO);
+            
+            var boletosValidosQuery = query.Where(b => b.Estatus == ESTATUS_BOLETO_PAGADO || b.Estatus == ESTATUS_BOLETO_USADO);
+            var ingresoTotal = await boletosValidosQuery.SumAsync(b => (decimal?)b.PrecioTotal) ?? 0;
+            var ingresoBase = await boletosValidosQuery.SumAsync(b => (decimal?)b.PrecioBase) ?? 0;
+            var descuentos = await boletosValidosQuery.SumAsync(b => (decimal?)b.Descuento) ?? 0;
+            var cargos = await boletosValidosQuery.SumAsync(b => (decimal?)b.CargoServicio) ?? 0;
 
             // 2. Ventas por Evento (Ejecutado en BD)
             var ventasPorEvento = await query
@@ -65,9 +66,11 @@ public class ReportesController : ControllerBase
                 .Select(g => new
                 {
                     eventoId = g.Key.EventoID,
-                    eventoNombre = g.Key.Nombre,
+                    eventoNombre = g.Key.Nombre ?? "Sin evento",
                     totalBoletos = g.Count(),
-                    ingresoTotal = g.Where(b => b.Estatus == 10 || b.Estatus == 11).Sum(b => (decimal?)b.PrecioTotal) ?? 0
+                    boletosVendidos = g.Count(b => b.Estatus == ESTATUS_BOLETO_PAGADO || b.Estatus == ESTATUS_BOLETO_USADO),
+                    ingresoTotal = g.Where(b => b.Estatus == ESTATUS_BOLETO_PAGADO || b.Estatus == ESTATUS_BOLETO_USADO)
+                                    .Sum(b => (decimal?)b.PrecioTotal) ?? 0
                 })
                 .OrderByDescending(x => x.ingresoTotal)
                 .ToListAsync();
@@ -79,7 +82,9 @@ public class ReportesController : ControllerBase
                 {
                     fecha = g.Key,
                     totalBoletos = g.Count(),
-                    ingresoTotal = g.Where(b => b.Estatus == 10 || b.Estatus == 11).Sum(b => (decimal?)b.PrecioTotal) ?? 0
+                    boletosVendidos = g.Count(b => b.Estatus == ESTATUS_BOLETO_PAGADO || b.Estatus == ESTATUS_BOLETO_USADO),
+                    ingresoTotal = g.Where(b => b.Estatus == ESTATUS_BOLETO_PAGADO || b.Estatus == ESTATUS_BOLETO_USADO)
+                                    .Sum(b => (decimal?)b.PrecioTotal) ?? 0
                 })
                 .OrderBy(x => x.fecha)
                 .ToListAsync();
@@ -87,13 +92,14 @@ public class ReportesController : ControllerBase
             var reporte = new
             {
                 periodo = new { desde, hasta },
-                totalBoletos = stats?.TotalBoletos ?? 0,
-                boletosVendidos = stats?.BoletosVendidos ?? 0,
-                boletosCancelados = stats?.BoletosCancelados ?? 0,
-                ingresoTotal = stats?.IngresoTotal ?? 0,
-                ingresoBase = stats?.IngresoBase ?? 0,
-                descuentosAplicados = stats?.Descuentos ?? 0,
-                cargosServicio = stats?.Cargos ?? 0,
+                totalBoletos,
+                boletosVendidos,
+                boletosCancelados,
+                ingresoTotal,
+                ingresoBase,
+                descuentosAplicados = descuentos,
+                cargosServicio = cargos,
+                iva = ingresoTotal - ingresoBase - cargos + descuentos, // Calcular IVA
                 ventasPorEvento,
                 ventasPorDia
             };
@@ -131,17 +137,11 @@ public class ReportesController : ControllerBase
             if (eventoId.HasValue)
                 query = query.Where(v => v.EventoID == eventoId.Value);
 
-            // 1. Totales Generales (BD)
-            var stats = await query
-                .GroupBy(v => 1)
-                .Select(g => new
-                {
-                    TotalViajes = g.Count(),
-                    ViajesCompletos = g.Count(v => v.AsientosDisponibles == 0),
-                    TotalAsientos = g.Sum(v => v.CupoTotal),
-                    TotalVendidos = g.Sum(v => v.AsientosVendidos)
-                })
-                .FirstOrDefaultAsync();
+            // 1. Totales Generales (BD) - Sin GroupBy para manejar vacíos
+            var totalViajes = await query.CountAsync();
+            var viajesCompletos = await query.CountAsync(v => v.AsientosDisponibles == 0);
+            var totalAsientos = await query.SumAsync(v => (int?)v.CupoTotal) ?? 0;
+            var totalVendidos = await query.SumAsync(v => (int?)v.AsientosVendidos) ?? 0;
 
             // 2. Ocupación por Evento (BD)
             var rawOcupacionEvento = await query
@@ -149,10 +149,10 @@ public class ReportesController : ControllerBase
                 .Select(g => new
                 {
                     eventoId = g.Key.EventoID,
-                    eventoNombre = g.Key.Nombre,
+                    eventoNombre = g.Key.Nombre ?? "Sin evento",
                     totalViajes = g.Count(),
-                    totalAsientos = g.Sum(v => v.CupoTotal),
-                    asientosVendidos = g.Sum(v => v.AsientosVendidos)
+                    totalAsientos = g.Sum(v => (int?)v.CupoTotal) ?? 0,
+                    asientosVendidos = g.Sum(v => (int?)v.AsientosVendidos) ?? 0
                 })
                 .ToListAsync();
 
@@ -178,7 +178,7 @@ public class ReportesController : ControllerBase
                 {
                     v.ViajeID,
                     v.CodigoViaje,
-                    eventoNombre = v.Evento.Nombre,
+                    eventoNombre = v.Evento != null ? v.Evento.Nombre : "Sin evento",
                     rutaNombre = v.PlantillaRuta.NombreRuta,
                     v.FechaSalida,
                     v.CupoTotal,
@@ -211,13 +211,14 @@ public class ReportesController : ControllerBase
             var reporte = new
             {
                 periodo = new { desde, hasta },
-                totalViajes = stats?.TotalViajes ?? 0,
-                viajesCompletos = stats?.ViajesCompletos ?? 0,
-                promedioOcupacion = (stats?.TotalAsientos ?? 0) > 0 
-                    ? Math.Round(((stats?.TotalVendidos ?? 0) * 100.0) / (stats?.TotalAsientos ?? 1), 2) 
+                totalViajes,
+                viajesCompletos,
+                promedioOcupacion = totalAsientos > 0 
+                    ? Math.Round((totalVendidos * 100.0) / totalAsientos, 2) 
                     : 0,
-                totalAsientosDisponibles = stats?.TotalAsientos ?? 0,
-                totalAsientosVendidos = stats?.TotalVendidos ?? 0,
+                totalAsientosDisponibles = totalAsientos,
+                totalAsientosVendidos = totalVendidos,
+                asientosLibres = totalAsientos - totalVendidos,
                 ocupacionPorViaje = ocupacionPorViajeFinal,
                 ocupacionPorEvento
             };
@@ -244,12 +245,18 @@ public class ReportesController : ControllerBase
             var hoy = DateTime.Now.Date;
             var mesActual = new DateTime(hoy.Year, hoy.Month, 1);
 
+            // Constantes para estatus
+            const int ESTATUS_BOLETO_PAGADO = 10;
+            const int ESTATUS_BOLETO_USADO = 11;
+            const int ESTATUS_ACTIVO = 1;
+            const int ESTATUS_EN_PROCESO = 2;
+
             // Métricas de boletos
             var boletosHoy = await _context.Boletos.CountAsync(b => b.FechaCompra.Date == hoy);
             var boletosMes = await _context.Boletos.CountAsync(b => b.FechaCompra >= mesActual);
             var ingresosMes = await _context.Boletos
-                .Where(b => b.FechaCompra >= mesActual && (b.Estatus == 10 || b.Estatus == 11))
-                .SumAsync(b => b.PrecioTotal);
+                .Where(b => b.FechaCompra >= mesActual && (b.Estatus == ESTATUS_BOLETO_PAGADO || b.Estatus == ESTATUS_BOLETO_USADO))
+                .SumAsync(b => (decimal?)b.PrecioTotal) ?? 0;
 
             // Métricas de viajes
             var viajesProximos = await _context.Viajes
@@ -258,17 +265,17 @@ public class ReportesController : ControllerBase
                 .CountAsync(v => v.FechaSalida.Date == hoy);
 
             // Métricas de usuarios
-            var usuariosActivos = await _context.Users.CountAsync(u => u.Estatus == 1);
+            var usuariosActivos = await _context.Users.CountAsync(u => u.Estatus == ESTATUS_ACTIVO);
             var usuariosNuevosMes = await _context.Users
                 .CountAsync(u => u.FechaRegistro >= mesActual);
 
             // Incidencias abiertas (Estatus: 1=Activo, 2=EnProceso)
             var incidenciasAbiertas = await _context.Incidencias
-                .CountAsync(i => i.Estatus == 1 || i.Estatus == 2);
+                .CountAsync(i => i.Estatus == ESTATUS_ACTIVO || i.Estatus == ESTATUS_EN_PROCESO);
 
             // Eventos activos
             var eventosActivos = await _context.Eventos
-                .CountAsync(e => e.Estatus == 1);
+                .CountAsync(e => e.Estatus == ESTATUS_ACTIVO);
 
             var dashboard = new
             {
@@ -306,12 +313,15 @@ public class ReportesController : ControllerBase
                     {
                         v.ViajeID,
                         v.CodigoViaje,
-                        eventoNombre = v.Evento.Nombre,
+                        eventoNombre = v.Evento != null ? v.Evento.Nombre : "Sin evento",
                         rutaNombre = v.PlantillaRuta.NombreRuta,
                         v.FechaSalida,
                         v.AsientosVendidos,
                         v.CupoTotal,
-                        ocupacion = Math.Round((v.AsientosVendidos * 100.0) / v.CupoTotal, 2)
+                        v.AsientosDisponibles,
+                        porcentajeOcupacion = v.CupoTotal > 0 
+                            ? Math.Round((v.AsientosVendidos * 100.0) / v.CupoTotal, 2)
+                            : 0
                     })
                     .ToListAsync()
             };
