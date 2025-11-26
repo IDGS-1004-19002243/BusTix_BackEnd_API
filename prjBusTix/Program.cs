@@ -223,7 +223,7 @@ builder.Services.AddScoped<prjBusTix.Services.INotificacionService, prjBusTix.Se
 builder.Services.AddScoped<prjBusTix.Services.HangfireJobsService>();
 builder.Services.AddScoped<prjBusTix.Services.IAuditoriaService, prjBusTix.Services.AuditoriaService>();
 // Registrar servicio de validación
-builder.Services.AddScoped<prjBusTix.Services.IValidacionService, prjBusTix.Services.ValidacionService>();
+
 
 builder.Services.AddHttpContextAccessor(); // Necesario para auditoría
 

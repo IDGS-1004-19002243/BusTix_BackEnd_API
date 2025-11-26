@@ -156,120 +156,103 @@ public class PreciosParadaController : ControllerBase
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<ActionResult> ConfigurarPrecios(int viajeId, [FromBody] List<ConfigurarPrecioParadaDto> preciosDto)
     {
+        using var transaction = await _context.Database.BeginTransactionAsync();
+        
         try
         {
             var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
             if (string.IsNullOrEmpty(userId))
                 return Unauthorized(new { message = "Usuario no autenticado" });
 
-            var result = await _context.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
+            // Validar que el viaje existe
+            var viaje = await _context.Viajes
+                .Include(v => v.Paradas)
+                .FirstOrDefaultAsync(v => v.ViajeID == viajeId);
+            
+            if (viaje == null)
+                return NotFound(new { message = "Viaje no encontrado" });
+
+            // Validar que las paradas existen
+            var paradaIds = preciosDto.Select(p => p.ParadaViajeID).ToList();
+            var paradasValidas = await _context.ParadasViaje
+                .Where(p => p.ViajeID == viajeId && paradaIds.Contains(p.ParadaViajeID))
+                .Select(p => p.ParadaViajeID)
+                .ToListAsync();
+
+            if (paradasValidas.Count != paradaIds.Count)
+                return BadRequest(new { message = "Una o más paradas no pertenecen al viaje especificado" });
+
+            // Obtener todos los precios existentes para este viaje en una sola consulta
+            var preciosExistentes = await _context.PreciosParada
+                .Where(p => p.ViajeID == viajeId)
+                .ToDictionaryAsync(p => p.ParadaViajeID, p => p);
+
+            var preciosCreados = new List<PrecioParada>();
+            var preciosActualizados = new List<PrecioParada>();
+
+            foreach (var dto in preciosDto)
             {
-                using var transaction = await _context.Database.BeginTransactionAsync();
-                
-                try
+                // Validar precios
+                if (dto.PrecioBase < 0 || dto.CargoServicio < 0)
                 {
-                    // Validar que el viaje existe
-                    var viaje = await _context.Viajes
-                        .Include(v => v.Paradas)
-                        .FirstOrDefaultAsync(v => v.ViajeID == viajeId);
-
-                    if (viaje == null)
-                    {
-                        return (false, "Viaje no encontrado", 0, 0);
-                    }
-
-                    // Construir conjunto de IDs de paradas del viaje para validaciones
-                    var paradasDelViaje = viaje.Paradas.Select(p => p.ParadaViajeID).ToHashSet();
-
-                    // Validar que todas las paradas en el DTO pertenecen al viaje
-                    var idsInvalidos = preciosDto.Where(d => !paradasDelViaje.Contains(d.ParadaViajeID)).Select(d => d.ParadaViajeID).ToList();
-                    if (idsInvalidos.Any())
-                    {
-                        return (false, $"Las siguientes paradas no pertenecen al viaje {viajeId}: {string.Join(',', idsInvalidos)}", 0, 0);
-                    }
-
-                    var preciosExistentes = await _context.PreciosParada
-                        .Where(p => p.ViajeID == viajeId)
-                        .ToDictionaryAsync(p => p.ParadaViajeID, p => p);
-
-                    var preciosCreados = new List<PrecioParada>();
-                    var preciosActualizados = new List<PrecioParada>();
-
-                    foreach (var dto in preciosDto)
-                    {
-                        // Validar precios
-                        if (dto.PrecioBase < 0 || dto.CargoServicio < 0)
-                        {
-                            return (false, $"Los precios no pueden ser negativos (Parada: {dto.ParadaViajeID})", 0, 0);
-                        }
-
-                        // Buscar si ya existe un precio para esta parada en memoria
-                        if (preciosExistentes.TryGetValue(dto.ParadaViajeID, out var precioExistente))
-                        {
-                            // Actualizar precio existente
-                            precioExistente.PrecioBase = dto.PrecioBase;
-                            precioExistente.CargoServicio = dto.CargoServicio;
-                            precioExistente.PrecioTotal = dto.PrecioBase + dto.CargoServicio;
-                            precioExistente.Observaciones = dto.Observaciones;
-                            precioExistente.EsActivo = true;
-                            
-                            preciosActualizados.Add(precioExistente);
-                        }
-                        else
-                        {
-                            // Crear nuevo precio
-                            var nuevoPrecio = new PrecioParada
-                            {
-                                ViajeID = viajeId,
-                                ParadaViajeID = dto.ParadaViajeID,
-                                PrecioBase = dto.PrecioBase,
-                                CargoServicio = dto.CargoServicio,
-                                PrecioTotal = dto.PrecioBase + dto.CargoServicio,
-                                EsActivo = true,
-                                FechaCreacion = DateTime.Now,
-                                CreadoPor = userId,
-                                Observaciones = dto.Observaciones
-                            };
-                            
-                            _context.PreciosParada.Add(nuevoPrecio);
-                            preciosCreados.Add(nuevoPrecio);
-                        }
-                    }
-
-                    await _context.SaveChangesAsync();
-                    await transaction.CommitAsync();
-
-                    return (true, "Precios configurados exitosamente", preciosCreados.Count, preciosActualizados.Count);
+                    return BadRequest(new { message = $"Los precios no pueden ser negativos (Parada: {dto.ParadaViajeID})" });
                 }
-                catch
+
+                // Buscar si ya existe un precio para esta parada en memoria
+                if (preciosExistentes.TryGetValue(dto.ParadaViajeID, out var precioExistente))
                 {
-                    await transaction.RollbackAsync();
-                    throw;
+                    // Actualizar precio existente
+                    precioExistente.PrecioBase = dto.PrecioBase;
+                    precioExistente.CargoServicio = dto.CargoServicio;
+                    precioExistente.PrecioTotal = dto.PrecioBase + dto.CargoServicio;
+                    precioExistente.Observaciones = dto.Observaciones;
+                    precioExistente.EsActivo = true;
+                    
+                    preciosActualizados.Add(precioExistente);
                 }
-            });
+                else
+                {
+                    // Crear nuevo precio
+                    var nuevoPrecio = new PrecioParada
+                    {
+                        ViajeID = viajeId,
+                        ParadaViajeID = dto.ParadaViajeID,
+                        PrecioBase = dto.PrecioBase,
+                        CargoServicio = dto.CargoServicio,
+                        PrecioTotal = dto.PrecioBase + dto.CargoServicio,
+                        EsActivo = true,
+                        FechaCreacion = DateTime.Now,
+                        CreadoPor = userId,
+                        Observaciones = dto.Observaciones
+                    };
+                    
+                    _context.PreciosParada.Add(nuevoPrecio);
+                    preciosCreados.Add(nuevoPrecio);
+                }
+            }
 
-            if (!result.Item1)
-                return BadRequest(new { message = result.Item2 });
+            await _context.SaveChangesAsync();
+            await transaction.CommitAsync();
 
             _logger.LogInformation(
                 "Precios configurados para viaje {ViajeId}: {Creados} creados, {Actualizados} actualizados por usuario {UserId}",
-                viajeId, result.Item3, result.Item4, userId);
+                viajeId, preciosCreados.Count, preciosActualizados.Count, userId);
 
             return Ok(new
             {
                 success = true,
-                message = result.Item2,
-                preciosCreados = result.Item3,
-                preciosActualizados = result.Item4
+                message = "Precios configurados exitosamente",
+                preciosCreados = preciosCreados.Count,
+                preciosActualizados = preciosActualizados.Count
             });
         }
         catch (Exception ex)
         {
+            await transaction.RollbackAsync();
             _logger.LogError(ex, "Error al configurar precios del viaje {ViajeId}", viajeId);
             return StatusCode(500, new { message = "Error al configurar los precios", error = ex.Message });
         }
     }
-
 
     /// <summary>
     /// Actualizar el precio de una parada específica
@@ -301,18 +284,6 @@ public class PreciosParadaController : ControllerBase
             // Validar consistencia si se envía ParadaViajeID
             if (dto.ParadaViajeID != 0 && dto.ParadaViajeID != precio.ParadaViajeID)
                 return BadRequest(new { message = "No se puede cambiar la parada asociada a un precio existente" });
-
-            // Validar que la parada pertenece al viaje
-            var viaje = await _context.Viajes
-                .Include(v => v.Paradas)
-                .FirstOrDefaultAsync(v => v.ViajeID == viajeId);
-
-            if (viaje == null)
-                return NotFound(new { message = "Viaje no encontrado" });
-
-            var paradasDelViaje = viaje.Paradas.Select(p => p.ParadaViajeID).ToHashSet();
-            if (!paradasDelViaje.Contains(dto.ParadaViajeID))
-                return BadRequest(new { message = "La parada no pertenece al viaje" });
 
             precio.PrecioBase = dto.PrecioBase;
             precio.CargoServicio = dto.CargoServicio;
@@ -455,3 +426,4 @@ public class PreciosParadaController : ControllerBase
         }
     }
 }
+
