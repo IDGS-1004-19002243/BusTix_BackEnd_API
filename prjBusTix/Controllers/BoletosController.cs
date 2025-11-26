@@ -162,10 +162,14 @@ public class BoletosController : ControllerBase
     [HttpPost("iniciar-compra")]
     public async Task<ActionResult> IniciarCompra([FromBody] IniciarCompraDto dto)
     {
-        using var transaction = await _context.Database.BeginTransactionAsync();
-        
-        try
+        var strategy = _context.Database.CreateExecutionStrategy();
+
+        return await strategy.ExecuteAsync<ActionResult>(async () =>
         {
+            using var transaction = await _context.Database.BeginTransactionAsync();
+        
+            try
+            {
             var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
             if (string.IsNullOrEmpty(userId))
                 return Unauthorized();
@@ -344,6 +348,7 @@ public class BoletosController : ControllerBase
             _logger.LogError(ex, "Error al iniciar compra de boletos");
             return StatusCode(500, new { message = "Error al procesar la solicitud de compra" });
         }
+        });
     }
     /// GET /api/boletos/{id}
     /// </summary>
@@ -487,10 +492,14 @@ public class BoletosController : ControllerBase
     [HttpPut("{id}/cancelar")]
     public async Task<IActionResult> CancelarBoleto(int id, [FromBody] CancelarBoletoDto dto)
     {
-        using var transaction = await _context.Database.BeginTransactionAsync();
-        
-        try
+        var strategy = _context.Database.CreateExecutionStrategy();
+
+        return await strategy.ExecuteAsync<IActionResult>(async () =>
         {
+            using var transaction = await _context.Database.BeginTransactionAsync();
+        
+            try
+            {
             var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
             
             var boleto = await _context.Boletos
@@ -599,6 +608,7 @@ public class BoletosController : ControllerBase
                 message = "Error al cancelar el boleto" 
             });
         }
+        });
     }
     
     /// <summary>
@@ -686,10 +696,14 @@ public class BoletosController : ControllerBase
     [Authorize(Roles = "Admin,Staff,Manager")]
     public async Task<IActionResult> ValidarBoleto(int id, [FromBody] ValidarBoletoDto dto)
     {
-        using var transaction = await _context.Database.BeginTransactionAsync();
-        
-        try
+        var strategy = _context.Database.CreateExecutionStrategy();
+
+        return await strategy.ExecuteAsync<IActionResult>(async () =>
         {
+            using var transaction = await _context.Database.BeginTransactionAsync();
+        
+            try
+            {
             var staffId = User.FindFirstValue(ClaimTypes.NameIdentifier);
             
             var boleto = await _context.Boletos
@@ -792,6 +806,7 @@ public class BoletosController : ControllerBase
                 message = "Error al validar el boleto" 
             });
         }
+        });
     }
     
     /// <summary>

@@ -218,10 +218,10 @@ public class NotificacionService : INotificacionService
     {
         try
         {
-            var smtpServer = _configuration["EmailSettings:Server"];
-            var smtpPort = int.Parse(_configuration["EmailSettings:Port"] ?? "587");
-            var smtpUser = _configuration["EmailSettings:SenderEmail"];
-            var smtpPass = _configuration["EmailSettings:Password"];
+            var smtpServer = _configuration["MailSettings:Server"];
+            var smtpPort = int.Parse(_configuration["MailSettings:Port"] ?? "587");
+            var smtpUser = _configuration["MailSettings:SenderEmail"];
+            var smtpPass = _configuration["MailSettings:Password"];
             
             if (string.IsNullOrEmpty(smtpServer) || string.IsNullOrEmpty(smtpUser))
             {
