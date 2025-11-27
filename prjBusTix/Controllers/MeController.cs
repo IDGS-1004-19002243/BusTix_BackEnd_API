@@ -37,7 +37,7 @@ public class MeController : ControllerBase
     /// GET /api/me/boletos
     /// </summary>
     [HttpGet("boletos")]
-    public async Task<ActionResult<IEnumerable<BoletoResponseDto>>> GetMisBoletos(
+    public async Task<ActionResult<IEnumerable<EventoBoletosDto>>> GetMisBoletos(
         [FromQuery] string? estatus = null,
         [FromQuery] bool? soloActivos = null)
     {
@@ -55,8 +55,12 @@ public class MeController : ControllerBase
                     .ThenInclude(v => v.PlantillaRuta)
                 .Include(b => b.Viaje)
                     .ThenInclude(v => v.Evento)
+                .Include(b => b.Viaje)
+                    .ThenInclude(v => v.Unidad)
                 .Include(b => b.ParadaAbordaje)
                 .Include(b => b.EstatusNavigation)
+                .Include(b => b.PagosBoletos)
+                    .ThenInclude(pb => pb.Pago)
                 .Where(b => b.ClienteID == userId)
                 .AsQueryable();
 
@@ -79,38 +83,64 @@ public class MeController : ControllerBase
                 .OrderByDescending(b => b.FechaCompra)
                 .ToListAsync();
 
-            var response = boletos.Select(b => new BoletoResponseDto
-            {
-                BoletoID = b.BoletoID,
-                CodigoBoleto = b.CodigoBoleto,
-                CodigoQR = b.CodigoQR,
-                ViajeID = b.ViajeID,
-                CodigoViaje = b.Viaje.CodigoViaje,
-                CiudadOrigen = b.Viaje.PlantillaRuta.CiudadOrigen,
-                CiudadDestino = b.Viaje.PlantillaRuta.CiudadDestino,
-                FechaSalida = b.Viaje.FechaSalida,
-                NumeroAsiento = b.NumeroAsiento,
-                NombrePasajero = b.NombrePasajero,
-                EmailPasajero = b.EmailPasajero,
-                TelefonoPasajero = b.TelefonoPasajero,
-                PrecioBase = b.PrecioBase,
-                Descuento = b.Descuento,
-                CargoServicio = b.CargoServicio,
-                IVA = b.IVA,
-                PrecioTotal = b.PrecioTotal,
-                Estatus = b.Estatus,
-                EstatusNombre = b.EstatusNavigation.Nombre,
-                FechaCompra = b.FechaCompra,
-                FechaValidacion = b.FechaValidacion,
-                ParadaAbordaje = b.ParadaAbordaje?.NombreParada,
-                HoraEstimadaAbordaje = b.ParadaAbordaje?.HoraEstimadaLlegada
-            }).ToList();
+            // Agrupar por Evento
+            var eventosGroup = boletos
+                .GroupBy(b => b.Viaje.Evento)
+                .Select(gEvento => new EventoBoletosDto
+                {
+                    EventoID = gEvento.Key.EventoID,
+                    NombreEvento = gEvento.Key.Nombre,
+                    ImagenEvento = gEvento.Key.UrlImagen,
+                    UbicacionEvento = string.Join(", ", new[] { gEvento.Key.Recinto, gEvento.Key.Ciudad }.Where(s => !string.IsNullOrEmpty(s))),
+                    FechaEvento = gEvento.Key.Fecha,
+                    Transacciones = gEvento
+                        // Agrupar por Transacción (Pago)
+                        // Un boleto puede tener múltiples pagos, pero asumimos que para la vista de usuario
+                        // queremos agrupar por el pago principal o el primero encontrado si hay varios.
+                        // O mejor, agrupamos por el ID del Pago asociado al boleto.
+                        // Nota: Un boleto podría no tener pago si es cortesía o 100% descuento, manejar ese caso.
+                        .GroupBy(b => b.PagosBoletos.FirstOrDefault()?.Pago)
+                        .Select(gPago => new TransaccionBoletosDto
+                        {
+                            PagoID = gPago.Key?.PagoID ?? 0,
+                            CodigoPago = gPago.Key?.CodigoPago ?? "SIN-PAGO",
+                            TransaccionID = gPago.Key?.TransaccionID,
+                            FechaPago = gPago.Key?.FechaPago ?? gPago.First().FechaCompra,
+                            MontoTotal = gPago.Key?.Monto ?? 0, // Monto total de la transacción
+                            MetodoPago = gPago.Key?.MetodoPago ?? "N/A",
+                            Boletos = gPago.Select(b => new BoletoCompletoDto
+                            {
+                                BoletoID = b.BoletoID,
+                                CodigoBoleto = b.CodigoBoleto,
+                                CodigoQR = b.CodigoQR,
+                                NumeroAsiento = b.NumeroAsiento,
+                                NombrePasajero = b.NombrePasajero,
+                                PrecioTotal = b.PrecioTotal,
+                                Estatus = b.Estatus,
+                                EstatusNombre = b.EstatusNavigation.Nombre,
+                                ParadaAbordaje = b.ParadaAbordaje?.NombreParada,
+                                ParadaAbordajeLatitud = b.ParadaAbordaje?.Latitud,
+                                ParadaAbordajeLongitud = b.ParadaAbordaje?.Longitud,
+                                DetalleViaje = new BoletoDetalleViajeDto
+                                {
+                                    ViajeID = b.ViajeID,
+                                    CodigoViaje = b.Viaje.CodigoViaje,
+                                    CiudadOrigen = b.Viaje.PlantillaRuta.CiudadOrigen,
+                                    CiudadDestino = b.Viaje.PlantillaRuta.CiudadDestino,
+                                    FechaSalida = b.Viaje.FechaSalida,
+                                    FechaLlegadaEstimada = b.Viaje.FechaLlegadaEstimada,
+                                    UnidadPlacas = b.Viaje.Unidad?.Placas,
+                                    UnidadNumeroEconomico = b.Viaje.Unidad?.NumeroEconomico
+                                }
+                            }).ToList()
+                        }).ToList()
+                }).ToList();
 
             return Ok(new
             {
                 success = true,
-                data = response,
-                total = response.Count
+                data = eventosGroup,
+                total = eventosGroup.Count
             });
         }
         catch (Exception ex)
