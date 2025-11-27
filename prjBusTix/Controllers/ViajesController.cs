@@ -411,6 +411,119 @@ public class ViajesController : ControllerBase
     }
 
     /// <summary>
+    /// Verificar disponibilidad de unidad y chofer antes de crear el viaje
+    /// </summary>
+    [HttpPost("verificar-disponibilidad")]
+    [ClRequirePermission(ClAppPermissions.ViajesCreate)]
+    public async Task<ActionResult<DisponibilidadResponseDto>> VerificarDisponibilidad([FromBody] CrearViajeDto dto)
+    {
+        return await VerificarDisponibilidadInternal(dto);
+    }
+
+    /// <summary>
+    /// Verificar disponibilidad (versión GET para compatibilidad con frontend)
+    /// </summary>
+    [HttpGet("verificar-disponibilidad")]
+    [ClRequirePermission(ClAppPermissions.ViajesCreate)]
+    public async Task<ActionResult<DisponibilidadResponseDto>> VerificarDisponibilidadGet([FromQuery] CrearViajeDto dto)
+    {
+        return await VerificarDisponibilidadInternal(dto);
+    }
+
+    private async Task<ActionResult<DisponibilidadResponseDto>> VerificarDisponibilidadInternal(CrearViajeDto dto)
+    {
+        try
+        {
+            var response = new DisponibilidadResponseDto { EstaDisponible = true };
+            var conflictos = new List<ConflictoDto>();
+
+            // Validar que la plantilla de ruta existe para obtener tiempo estimado
+            var plantillaRuta = await _context.PlantillasRutas.FindAsync(dto.PlantillaRutaID);
+            if (plantillaRuta == null)
+            {
+                return BadRequest(new { message = "La plantilla de ruta especificada no existe" });
+            }
+
+            // Calcular ventana de tiempo
+            var minutosFallback = (plantillaRuta.TiempoEstimadoMinutos ?? 240);
+            var nuevoInicio = dto.FechaSalida;
+            var nuevoFin = dto.FechaLlegadaEstimada ?? dto.FechaSalida.AddMinutes(minutosFallback);
+
+            // Verificar conflictos de Unidad
+            if (dto.UnidadID.HasValue)
+            {
+                var viajesConflicto = await _context.Viajes
+                    .Include(v => v.Evento)
+                    .Include(v => v.PlantillaRuta)
+                    .Where(v =>
+                        v.UnidadID == dto.UnidadID.Value && 
+                        v.Estatus != 3 && // No cancelado
+                        v.FechaSalida <= nuevoFin &&
+                        (v.FechaLlegadaEstimada ?? v.FechaSalida.AddMinutes(240)) >= nuevoInicio)
+                    .ToListAsync();
+
+                foreach (var v in viajesConflicto)
+                {
+                    conflictos.Add(new ConflictoDto
+                    {
+                        ViajeID = v.ViajeID,
+                        CodigoViaje = v.CodigoViaje,
+                        FechaSalida = v.FechaSalida,
+                        FechaLlegadaEstimada = v.FechaLlegadaEstimada,
+                        EventoNombre = v.Evento?.Nombre ?? "Sin Evento",
+                        RutaNombre = v.PlantillaRuta?.NombreRuta ?? "Sin Ruta"
+                    });
+                }
+            }
+
+            // Verificar conflictos de Chofer
+            if (!string.IsNullOrEmpty(dto.ChoferID))
+            {
+                var viajesConflicto = await _context.Viajes
+                    .Include(v => v.Evento)
+                    .Include(v => v.PlantillaRuta)
+                    .Where(v =>
+                        v.ChoferID == dto.ChoferID && 
+                        v.Estatus != 3 && // No cancelado
+                        v.FechaSalida <= nuevoFin &&
+                        (v.FechaLlegadaEstimada ?? v.FechaSalida.AddMinutes(240)) >= nuevoInicio)
+                    .ToListAsync();
+
+                // Agregar solo si no están ya en la lista (para evitar duplicados si coincide unidad y chofer)
+                foreach (var v in viajesConflicto)
+                {
+                    if (!conflictos.Any(c => c.ViajeID == v.ViajeID))
+                    {
+                        conflictos.Add(new ConflictoDto
+                        {
+                            ViajeID = v.ViajeID,
+                            CodigoViaje = v.CodigoViaje,
+                            FechaSalida = v.FechaSalida,
+                            FechaLlegadaEstimada = v.FechaLlegadaEstimada,
+                            EventoNombre = v.Evento?.Nombre ?? "Sin Evento",
+                            RutaNombre = v.PlantillaRuta?.NombreRuta ?? "Sin Ruta"
+                        });
+                    }
+                }
+            }
+
+            if (conflictos.Any())
+            {
+                response.EstaDisponible = false;
+                response.Mensaje = "Se encontraron conflictos de agenda";
+                response.Conflictos = conflictos;
+            }
+
+            return Ok(response);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error al verificar disponibilidad");
+            return StatusCode(500, new { message = "Error al verificar disponibilidad", error = ex.Message });
+        }
+    }
+
+    /// <summary>
     /// Crear un nuevo viaje
     /// </summary>
     [HttpPost]
@@ -419,32 +532,86 @@ public class ViajesController : ControllerBase
     {
         try
         {
+            // Validar ModelState y retornar errores detallados
+            if (!ModelState.IsValid)
+            {
+                var errors = ModelState
+                    .Where(x => x.Value?.Errors.Count > 0)
+                    .ToDictionary(
+                        kvp => kvp.Key,
+                        kvp => kvp.Value?.Errors.Select(e => e.ErrorMessage).ToArray()
+                    );
+                
+                return BadRequest(new
+                {
+                    success = false,
+                    message = "Error de validación en los datos proporcionados",
+                    errors = errors
+                });
+            }
+
             var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
 
             // Validar que el evento existe
             var evento = await _context.Eventos.FindAsync(dto.EventoID);
             if (evento == null)
-                return BadRequest(new { message = "El evento especificado no existe" });
+                return BadRequest(new { 
+                    success = false,
+                    message = $"El evento con ID {dto.EventoID} no existe en la base de datos",
+                    field = "EventoID",
+                    receivedValue = dto.EventoID
+                });
 
             // Validar que la plantilla de ruta existe
             var plantillaRuta = await _context.PlantillasRutas.FindAsync(dto.PlantillaRutaID);
             if (plantillaRuta == null || !plantillaRuta.Activa)
-                return BadRequest(new { message = "La plantilla de ruta especificada no existe o no est� activa" });
+                return BadRequest(new { 
+                    success = false,
+                    message = plantillaRuta == null 
+                        ? $"La plantilla de ruta con ID {dto.PlantillaRutaID} no existe en la base de datos"
+                        : $"La plantilla de ruta con ID {dto.PlantillaRutaID} está inactiva",
+                    field = "PlantillaRutaID",
+                    receivedValue = dto.PlantillaRutaID
+                });
 
             // Validar unidad si se proporciona
             if (dto.UnidadID.HasValue)
             {
                 var unidad = await _context.Unidades.FindAsync(dto.UnidadID.Value);
-                if (unidad == null || unidad.Estatus != 1)
-                    return BadRequest(new { message = "La unidad especificada no existe o no est� disponible" });
+                if (unidad == null)
+                    return BadRequest(new { 
+                        success = false,
+                        message = $"La unidad con ID {dto.UnidadID.Value} no existe en la base de datos",
+                        field = "UnidadID",
+                        receivedValue = dto.UnidadID.Value
+                    });
+                if (unidad.Estatus != 1)
+                    return BadRequest(new { 
+                        success = false,
+                        message = $"La unidad con ID {dto.UnidadID.Value} no está disponible (Estatus: {unidad.Estatus})",
+                        field = "UnidadID",
+                        receivedValue = dto.UnidadID.Value
+                    });
             }
 
             // Validar chofer si se proporciona
             if (!string.IsNullOrEmpty(dto.ChoferID))
             {
                 var chofer = await _context.Users.FindAsync(dto.ChoferID);
-                if (chofer == null || chofer.Estatus != 1)
-                    return BadRequest(new { message = "El chofer especificado no existe o no está activo" });
+                if (chofer == null)
+                    return BadRequest(new { 
+                        success = false,
+                        message = $"El chofer con ID '{dto.ChoferID}' no existe en la base de datos",
+                        field = "ChoferID",
+                        receivedValue = dto.ChoferID
+                    });
+                if (chofer.Estatus != 1)
+                    return BadRequest(new { 
+                        success = false,
+                        message = $"El chofer con ID '{dto.ChoferID}' no está activo (Estatus: {chofer.Estatus})",
+                        field = "ChoferID",
+                        receivedValue = dto.ChoferID
+                    });
             }
 
             // Calcular ventana de tiempo del nuevo viaje
@@ -592,6 +759,24 @@ public class ViajesController : ControllerBase
     {
         try
         {
+            // Validar ModelState y retornar errores detallados
+            if (!ModelState.IsValid)
+            {
+                var errors = ModelState
+                    .Where(x => x.Value?.Errors.Count > 0)
+                    .ToDictionary(
+                        kvp => kvp.Key,
+                        kvp => kvp.Value?.Errors.Select(e => e.ErrorMessage).ToArray()
+                    );
+                
+                return BadRequest(new
+                {
+                    success = false,
+                    message = "Error de validación en los datos proporcionados",
+                    errors = errors
+                });
+            }
+
             var viaje = await _context.Viajes.FindAsync(id);
             if (viaje == null)
                 return NotFound(new { message = "Viaje no encontrado" });
@@ -599,30 +784,6 @@ public class ViajesController : ControllerBase
             // No permitir actualizar viajes ya iniciados o terminados
             if (viaje.Estatus > 2)
                 return BadRequest(new { message = "No se puede modificar un viaje que ya inici� o termin�" });
-
-            // Validar unidad si se proporciona
-            if (dto.UnidadID.HasValue)
-            {
-                var unidad = await _context.Unidades.FindAsync(dto.UnidadID.Value);
-                if (unidad == null || unidad.Estatus != 1)
-                    return BadRequest(new { message = "La unidad especificada no existe o no est� disponible" });
-                viaje.UnidadID = dto.UnidadID;
-            }
-
-            // Validar chofer si se proporciona
-            if (dto.ChoferID != null)
-            {
-                if (!string.IsNullOrEmpty(dto.ChoferID))
-                {
-                    var chofer = await _context.Users.FindAsync(dto.ChoferID);
-                    if (chofer == null || chofer.Estatus != 1)
-                        return BadRequest(new { message = "El chofer especificado no existe o no est� activo" });
-                }
-                viaje.ChoferID = dto.ChoferID;
-            }
-
-            if (dto.FechaSalida.HasValue)
-                viaje.FechaSalida = dto.FechaSalida.Value;
 
             if (dto.FechaLlegadaEstimada.HasValue)
                 viaje.FechaLlegadaEstimada = dto.FechaLlegadaEstimada;
