@@ -34,6 +34,12 @@ public class HangfireJobsService
             () => VerificarViajesProximosAsync(),
             "*/30 * * * *"); // Cada 30 minutos
 
+        // Liberar asientos de reservas expiradas (pagos pendientes > 15 min)
+        RecurringJob.AddOrUpdate(
+            "liberar-asientos-reservados",
+            () => LiberarAsientosReservadosAsync(),
+            "*/5 * * * *"); // Cada 5 minutos
+
         _logger.LogInformation("Trabajos recurrentes configurados exitosamente");
     }
 
@@ -137,6 +143,69 @@ public class HangfireJobsService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error al verificar viajes próximos");
+        }
+    }
+
+    /// <summary>
+    /// Libera los asientos de pagos que quedaron pendientes por más de 15 minutos
+    /// Se ejecuta cada 5 minutos
+    /// </summary>
+    public async Task LiberarAsientosReservadosAsync()
+    {
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+            // Constantes
+            const int ESTATUS_PAGO_PENDIENTE = 14;
+            const int ESTATUS_PAGO_EXPIRADO = 18; // Nuevo estatus para diferenciar de rechazado
+            const int ESTATUS_BOLETO_CANCELADO = 12;
+            
+            var tiempoLimite = DateTime.Now.AddMinutes(-15);
+
+            // Buscar pagos pendientes expirados
+            var pagosExpirados = await context.Pagos
+                .Include(p => p.PagosBoletos)
+                    .ThenInclude(pb => pb.Boleto)
+                        .ThenInclude(b => b.Viaje)
+                .Where(p => p.Estatus == ESTATUS_PAGO_PENDIENTE && p.FechaPago < tiempoLimite)
+                .ToListAsync();
+
+            if (!pagosExpirados.Any()) return;
+
+            int asientosLiberados = 0;
+
+            foreach (var pago in pagosExpirados)
+            {
+                pago.Estatus = ESTATUS_PAGO_EXPIRADO;
+                pago.Proveedor = "Sistema (Expirado)";
+
+                foreach (var pagoBoleto in pago.PagosBoletos)
+                {
+                    var boleto = pagoBoleto.Boleto;
+                    
+                    // Solo cancelar si no estaba ya cancelado o pagado (por seguridad)
+                    if (boleto.Estatus != ESTATUS_BOLETO_CANCELADO && boleto.Estatus != 10) // 10 = Pagado
+                    {
+                        boleto.Estatus = ESTATUS_BOLETO_CANCELADO;
+                        
+                        // Liberar asiento
+                        boleto.Viaje.AsientosDisponibles++;
+                        asientosLiberados++;
+                    }
+                }
+            }
+
+            await context.SaveChangesAsync();
+
+            _logger.LogInformation(
+                "Limpieza de reservas completada. {PagosCount} pagos expirados, {AsientosCount} asientos liberados.",
+                pagosExpirados.Count, asientosLiberados);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error al liberar asientos reservados");
         }
     }
 }

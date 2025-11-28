@@ -462,7 +462,7 @@ public class BoletosController : ControllerBase
                     codigoBoleto = boleto.CodigoBoleto,
                     pasajero = boleto.NombrePasajero,
                     asiento = boleto.NumeroAsiento,
-                    estatus = boleto.EstatusNavigation.Nombre,
+                    estatus = boleto.EstatusNavigation?.Nombre ?? "Desconocido",
                     estatusId = boleto.Estatus,
                     yaUsado = boleto.Estatus == ESTATUS_BOLETO_USADO,
                     fechaValidacion = boleto.FechaValidacion,
@@ -817,163 +817,168 @@ public class BoletosController : ControllerBase
     [Authorize(Roles = "Admin,Staff,Manager")]
     public async Task<ActionResult<ValidacionResponseDto>> ValidarBoletoPorQR([FromBody] ValidacionDto dto)
     {
-        using var transaction = await _context.Database.BeginTransactionAsync();
-        
-        try
+        var strategy = _context.Database.CreateExecutionStrategy();
+
+        return await strategy.ExecuteAsync<ActionResult<ValidacionResponseDto>>(async () =>
         {
-            var staffId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            using var transaction = await _context.Database.BeginTransactionAsync();
             
-            // Buscar boleto por QR y viaje
-            var boleto = await _context.Boletos
-                .Include(b => b.Viaje)
-                .Include(b => b.Cliente)
-                .Include(b => b.EstatusNavigation)
-                .Include(b => b.ManifiestoPasajero)
-                .FirstOrDefaultAsync(b => b.CodigoQR == dto.CodigoQR && b.ViajeID == dto.ViajeID);
-            
-            if (boleto == null)
+            try
             {
-                await transaction.RollbackAsync();
-                return Ok(new ValidacionResponseDto
-                {
-                    Success = false,
-                    Message = "Boleto no encontrado o no corresponde a este viaje",
-                    Resultado = "Rechazado"
-                });
-            }
-            
-            const int ESTATUS_BOLETO_PAGADO = 10;
-            const int ESTATUS_BOLETO_USADO = 11;
-            const int ESTATUS_BOLETO_CANCELADO = 12;
-            const int ESTATUS_ABORDAJE_ABORDADO = 22;
-            
-            // Verificar si ya existe validación previa (idempotencia)
-            if (!string.IsNullOrEmpty(dto.DeviceValidationId))
-            {
-                var validacionExistente = await _context.RegistroValidacion
-                    .FirstOrDefaultAsync(r => r.DeviceValidationId == dto.DeviceValidationId);
+                var staffId = User.FindFirstValue(ClaimTypes.NameIdentifier);
                 
-                if (validacionExistente != null)
+                // Buscar boleto por QR y viaje
+                var boleto = await _context.Boletos
+                    .Include(b => b.Viaje)
+                    .Include(b => b.Cliente)
+                    .Include(b => b.EstatusNavigation)
+                    .Include(b => b.ManifiestoPasajero)
+                    .FirstOrDefaultAsync(b => b.CodigoQR == dto.CodigoQR && b.ViajeID == dto.ViajeID);
+                
+                if (boleto == null)
                 {
                     await transaction.RollbackAsync();
                     return Ok(new ValidacionResponseDto
                     {
-                        Success = true,
-                        Message = "Validación ya registrada previamente",
-                        ValidacionID = validacionExistente.ValidacionID,
-                        Resultado = validacionExistente.ResultadoValidacion,
-                        FechaHoraValidacion = validacionExistente.FechaHoraValidacion,
-                        BoletoID = boleto.BoletoID,
-                        ClienteNombre = boleto.Cliente?.NombreCompleto,
-                        AsientoAsignado = boleto.NumeroAsiento,
-                        EstadoBoleto = boleto.EstatusNavigation.Nombre
+                        Success = false,
+                        Message = "Boleto no encontrado o no corresponde a este viaje",
+                        Resultado = "Rechazado"
                     });
                 }
-            }
-            
-            // Validaciones de negocio
-            if (boleto.Estatus == ESTATUS_BOLETO_USADO)
-            {
-                await transaction.RollbackAsync();
-                return Ok(new ValidacionResponseDto
+                
+                const int ESTATUS_BOLETO_PAGADO = 10;
+                const int ESTATUS_BOLETO_USADO = 11;
+                const int ESTATUS_BOLETO_CANCELADO = 12;
+                const int ESTATUS_ABORDAJE_ABORDADO = 22;
+                
+                // Verificar si ya existe validación previa (idempotencia)
+                if (!string.IsNullOrEmpty(dto.DeviceValidationId))
                 {
-                    Success = false,
-                    Message = $"Este boleto ya fue validado el {boleto.FechaValidacion:dd/MM/yyyy HH:mm}",
-                    Resultado = "Rechazado",
+                    var validacionExistente = await _context.RegistroValidacion
+                        .FirstOrDefaultAsync(r => r.DeviceValidationId == dto.DeviceValidationId);
+                    
+                    if (validacionExistente != null)
+                    {
+                        await transaction.RollbackAsync();
+                        return Ok(new ValidacionResponseDto
+                        {
+                            Success = true,
+                            Message = "Validación ya registrada previamente",
+                            ValidacionID = validacionExistente.ValidacionID,
+                            Resultado = validacionExistente.ResultadoValidacion,
+                            FechaHoraValidacion = validacionExistente.FechaHoraValidacion,
+                            BoletoID = boleto.BoletoID,
+                            ClienteNombre = boleto.Cliente?.NombreCompleto,
+                            AsientoAsignado = boleto.NumeroAsiento,
+                            EstadoBoleto = boleto.EstatusNavigation?.Nombre ?? "Desconocido"
+                        });
+                    }
+                }
+                
+                // Validaciones de negocio
+                if (boleto.Estatus == ESTATUS_BOLETO_USADO)
+                {
+                    await transaction.RollbackAsync();
+                    return Ok(new ValidacionResponseDto
+                    {
+                        Success = false,
+                        Message = $"Este boleto ya fue validado el {boleto.FechaValidacion:dd/MM/yyyy HH:mm}",
+                        Resultado = "Rechazado",
+                        BoletoID = boleto.BoletoID,
+                        FechaHoraValidacion = boleto.FechaValidacion
+                    });
+                }
+                
+                if (boleto.Estatus == ESTATUS_BOLETO_CANCELADO)
+                {
+                    await transaction.RollbackAsync();
+                    return Ok(new ValidacionResponseDto
+                    {
+                        Success = false,
+                        Message = "Este boleto está cancelado",
+                        Resultado = "Rechazado",
+                        BoletoID = boleto.BoletoID
+                    });
+                }
+                
+                if (boleto.Estatus != ESTATUS_BOLETO_PAGADO)
+                {
+                    await transaction.RollbackAsync();
+                    return Ok(new ValidacionResponseDto
+                    {
+                        Success = false,
+                        Message = "El boleto no está en estado válido para usar",
+                        Resultado = "Rechazado",
+                        BoletoID = boleto.BoletoID,
+                        EstadoBoleto = boleto.EstatusNavigation?.Nombre ?? "Desconocido"
+                    });
+                }
+                
+                // Actualizar boleto
+                boleto.Estatus = ESTATUS_BOLETO_USADO;
+                boleto.FechaValidacion = DateTime.Now;
+                boleto.ValidadoPor = staffId;
+                
+                // Actualizar manifiesto
+                if (boleto.ManifiestoPasajero != null)
+                {
+                    boleto.ManifiestoPasajero.EstatusAbordaje = ESTATUS_ABORDAJE_ABORDADO;
+                    boleto.ManifiestoPasajero.FechaAbordaje = DateTime.Now;
+                    boleto.ManifiestoPasajero.FueValidado = true;
+                    boleto.ManifiestoPasajero.FechaValidacion = DateTime.Now;
+                    boleto.ManifiestoPasajero.ValidadoPor = staffId;
+                }
+                
+                // Registrar validación
+                var registro = new RegistroValidacion
+                {
                     BoletoID = boleto.BoletoID,
-                    FechaHoraValidacion = boleto.FechaValidacion
-                });
-            }
-            
-            if (boleto.Estatus == ESTATUS_BOLETO_CANCELADO)
-            {
-                await transaction.RollbackAsync();
+                    ViajeID = boleto.ViajeID,
+                    ValidadoPor = staffId ?? string.Empty,
+                    FechaHoraValidacion = DateTime.Now,
+                    CodigoQREscaneado = dto.CodigoQR,
+                    ResultadoValidacion = "Aprobado",
+                    TipoValidacion = dto.TipoValidacion ?? "EscaneoQR",
+                    EstacionLat = dto.EstacionLat,
+                    EstacionLong = dto.EstacionLong,
+                    Observaciones = dto.Observaciones,
+                    ModoOffline = false,
+                    DeviceValidationId = dto.DeviceValidationId
+                };
+                
+                _context.RegistroValidacion.Add(registro);
+                await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
+                
+                _logger.LogInformation(
+                    "Boleto {BoletoID} validado exitosamente por staff {StaffId}", 
+                    boleto.BoletoID, staffId);
+                
                 return Ok(new ValidacionResponseDto
                 {
-                    Success = false,
-                    Message = "Este boleto está cancelado",
-                    Resultado = "Rechazado",
-                    BoletoID = boleto.BoletoID
-                });
-            }
-            
-            if (boleto.Estatus != ESTATUS_BOLETO_PAGADO)
-            {
-                await transaction.RollbackAsync();
-                return Ok(new ValidacionResponseDto
-                {
-                    Success = false,
-                    Message = "El boleto no está en estado válido para usar",
-                    Resultado = "Rechazado",
+                    Success = true,
+                    Message = "Boleto validado correctamente",
+                    ValidacionID = registro.ValidacionID,
+                    Resultado = "Aprobado",
+                    FechaHoraValidacion = registro.FechaHoraValidacion,
                     BoletoID = boleto.BoletoID,
-                    EstadoBoleto = boleto.EstatusNavigation.Nombre
+                    ClienteNombre = boleto.Cliente?.NombreCompleto,
+                    AsientoAsignado = boleto.NumeroAsiento,
+                    EstadoBoleto = "Usado"
                 });
             }
-            
-            // Actualizar boleto
-            boleto.Estatus = ESTATUS_BOLETO_USADO;
-            boleto.FechaValidacion = DateTime.Now;
-            boleto.ValidadoPor = staffId;
-            
-            // Actualizar manifiesto
-            if (boleto.ManifiestoPasajero != null)
+            catch (Exception ex)
             {
-                boleto.ManifiestoPasajero.EstatusAbordaje = ESTATUS_ABORDAJE_ABORDADO;
-                boleto.ManifiestoPasajero.FechaAbordaje = DateTime.Now;
-                boleto.ManifiestoPasajero.FueValidado = true;
-                boleto.ManifiestoPasajero.FechaValidacion = DateTime.Now;
-                boleto.ManifiestoPasajero.ValidadoPor = staffId;
+                await transaction.RollbackAsync();
+                _logger.LogError(ex, "Error al validar boleto con QR {CodigoQR}", dto.CodigoQR);
+                return StatusCode(500, new ValidacionResponseDto
+                {
+                    Success = false,
+                    Message = $"Error interno al validar el boleto: {ex.Message}", // Exposing error for debugging
+                    Resultado = "Error"
+                });
             }
-            
-            // Registrar validación
-            var registro = new RegistroValidacion
-            {
-                BoletoID = boleto.BoletoID,
-                ViajeID = boleto.ViajeID,
-                ValidadoPor = staffId ?? string.Empty,
-                FechaHoraValidacion = DateTime.Now,
-                CodigoQREscaneado = dto.CodigoQR,
-                ResultadoValidacion = "Aprobado",
-                TipoValidacion = dto.TipoValidacion ?? "EscaneoQR",
-                EstacionLat = dto.EstacionLat,
-                EstacionLong = dto.EstacionLong,
-                Observaciones = dto.Observaciones,
-                ModoOffline = false,
-                DeviceValidationId = dto.DeviceValidationId
-            };
-            
-            _context.RegistroValidacion.Add(registro);
-            await _context.SaveChangesAsync();
-            await transaction.CommitAsync();
-            
-            _logger.LogInformation(
-                "Boleto {BoletoID} validado exitosamente por staff {StaffId}", 
-                boleto.BoletoID, staffId);
-            
-            return Ok(new ValidacionResponseDto
-            {
-                Success = true,
-                Message = "Boleto validado correctamente",
-                ValidacionID = registro.ValidacionID,
-                Resultado = "Aprobado",
-                FechaHoraValidacion = registro.FechaHoraValidacion,
-                BoletoID = boleto.BoletoID,
-                ClienteNombre = boleto.Cliente?.NombreCompleto,
-                AsientoAsignado = boleto.NumeroAsiento,
-                EstadoBoleto = "Usado"
-            });
-        }
-        catch (Exception ex)
-        {
-            await transaction.RollbackAsync();
-            _logger.LogError(ex, "Error al validar boleto con QR {CodigoQR}", dto.CodigoQR);
-            return StatusCode(500, new ValidacionResponseDto
-            {
-                Success = false,
-                Message = "Error interno al validar el boleto",
-                Resultado = "Error"
-            });
-        }
+        });
     }
     
     /// <summary>
@@ -983,73 +988,78 @@ public class BoletosController : ControllerBase
     [HttpPost("{id}/checkin")]
     public async Task<IActionResult> CheckIn(int id, [FromBody] CheckInDto? dto)
     {
-        using var transaction = await _context.Database.BeginTransactionAsync();
-        
-        try
+        var strategy = _context.Database.CreateExecutionStrategy();
+
+        return await strategy.ExecuteAsync<IActionResult>(async () =>
         {
-            var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            using var transaction = await _context.Database.BeginTransactionAsync();
             
-            var boleto = await _context.Boletos
-                .Include(b => b.Viaje)
-                .Include(b => b.Cliente)
-                .Include(b => b.ManifiestoPasajero)
-                .FirstOrDefaultAsync(b => b.BoletoID == id);
-            
-            if (boleto == null)
-                return NotFound(new { success = false, message = "Boleto no encontrado" });
-            
-            // Validar que el boleto pertenece al usuario o es admin/staff
-            var isStaff = User.IsInRole("Admin") || User.IsInRole("Staff") || User.IsInRole("Manager");
-            if (boleto.ClienteID != userId && !isStaff)
-                return Forbid();
-            
-            const int ESTATUS_BOLETO_PAGADO = 10;
-            const int ESTATUS_CHECK_IN = 24; // CHK_REALIZADO
-            
-            // Validar que el boleto está pagado
-            if (boleto.Estatus != ESTATUS_BOLETO_PAGADO)
+            try
+            {
+                var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+                
+                var boleto = await _context.Boletos
+                    .Include(b => b.Viaje)
+                    .Include(b => b.Cliente)
+                    .Include(b => b.ManifiestoPasajero)
+                    .FirstOrDefaultAsync(b => b.BoletoID == id);
+                
+                if (boleto == null)
+                    return NotFound(new { success = false, message = "Boleto no encontrado" });
+                
+                // Validar que el boleto pertenece al usuario o es admin/staff
+                var isStaff = User.IsInRole("Admin") || User.IsInRole("Staff") || User.IsInRole("Manager");
+                if (boleto.ClienteID != userId && !isStaff)
+                    return Forbid();
+                
+                const int ESTATUS_BOLETO_PAGADO = 10;
+                const int ESTATUS_CHECK_IN = 24; // CHK_REALIZADO
+                
+                // Validar que el boleto está pagado
+                if (boleto.Estatus != ESTATUS_BOLETO_PAGADO)
+                {
+                    await transaction.RollbackAsync();
+                    return Ok(new { success = false, message = "Solo se puede hacer check-in de boletos pagados", boletoId = id });
+                }
+                
+                // Validar que el viaje no haya salido
+                if (boleto.Viaje.FechaSalida < DateTime.Now)
+                {
+                    await transaction.RollbackAsync();
+                    return Ok(new { success = false, message = "No se puede hacer check-in de un viaje que ya salió", boletoId = id });
+                }
+                
+                // Validar que no se haya hecho check-in previamente
+                if (boleto.ManifiestoPasajero != null && boleto.ManifiestoPasajero.FechaCheckIn != null)
+                {
+                    await transaction.RollbackAsync();
+                    return Ok(new { success = false, message = $"Ya se realizó check-in el {boleto.ManifiestoPasajero.FechaCheckIn:dd/MM/yyyy HH:mm}", boletoId = id, fechaCheckIn = boleto.ManifiestoPasajero.FechaCheckIn });
+                }
+                
+                // Actualizar manifiesto con check-in
+                if (boleto.ManifiestoPasajero != null)
+                {
+                    boleto.ManifiestoPasajero.FechaCheckIn = DateTime.Now;
+                    boleto.ManifiestoPasajero.EstatusCheckIn = ESTATUS_CHECK_IN;
+                    boleto.ManifiestoPasajero.CheckInLat = dto?.Latitud;
+                    boleto.ManifiestoPasajero.CheckInLong = dto?.Longitud;
+                    boleto.ManifiestoPasajero.ObservacionesCheckIn = dto?.Observaciones;
+                }
+                
+                await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
+                
+                _logger.LogInformation("Check-in realizado para boleto {BoletoID} por usuario {UserId}", id, userId);
+                
+                return Ok(new { success = true, message = "Check-in realizado correctamente", boletoId = id, fechaCheckIn = DateTime.Now, clienteNombre = boleto.Cliente?.NombreCompleto, numeroAsiento = boleto.NumeroAsiento });
+            }
+            catch (Exception ex)
             {
                 await transaction.RollbackAsync();
-                return Ok(new { success = false, message = "Solo se puede hacer check-in de boletos pagados", boletoId = id });
+                _logger.LogError(ex, "Error al realizar check-in del boleto {BoletoID}", id);
+                return StatusCode(500, new { success = false, message = "Error al realizar check-in" });
             }
-            
-            // Validar que el viaje no haya salido
-            if (boleto.Viaje.FechaSalida < DateTime.Now)
-            {
-                await transaction.RollbackAsync();
-                return Ok(new { success = false, message = "No se puede hacer check-in de un viaje que ya salió", boletoId = id });
-            }
-            
-            // Validar que no se haya hecho check-in previamente
-            if (boleto.ManifiestoPasajero != null && boleto.ManifiestoPasajero.FechaCheckIn != null)
-            {
-                await transaction.RollbackAsync();
-                return Ok(new { success = false, message = $"Ya se realizó check-in el {boleto.ManifiestoPasajero.FechaCheckIn:dd/MM/yyyy HH:mm}", boletoId = id, fechaCheckIn = boleto.ManifiestoPasajero.FechaCheckIn });
-            }
-            
-            // Actualizar manifiesto con check-in
-            if (boleto.ManifiestoPasajero != null)
-            {
-                boleto.ManifiestoPasajero.FechaCheckIn = DateTime.Now;
-                boleto.ManifiestoPasajero.EstatusCheckIn = ESTATUS_CHECK_IN;
-                boleto.ManifiestoPasajero.CheckInLat = dto?.Latitud;
-                boleto.ManifiestoPasajero.CheckInLong = dto?.Longitud;
-                boleto.ManifiestoPasajero.ObservacionesCheckIn = dto?.Observaciones;
-            }
-            
-            await _context.SaveChangesAsync();
-            await transaction.CommitAsync();
-            
-            _logger.LogInformation("Check-in realizado para boleto {BoletoID} por usuario {UserId}", id, userId);
-            
-            return Ok(new { success = true, message = "Check-in realizado correctamente", boletoId = id, fechaCheckIn = DateTime.Now, clienteNombre = boleto.Cliente?.NombreCompleto, numeroAsiento = boleto.NumeroAsiento });
-        }
-        catch (Exception ex)
-        {
-            await transaction.RollbackAsync();
-            _logger.LogError(ex, "Error al realizar check-in del boleto {BoletoID}", id);
-            return StatusCode(500, new { success = false, message = "Error al realizar check-in" });
-        }
+        });
     }
     
     // Métodos auxiliares
