@@ -102,9 +102,25 @@ public class ViajesController : ControllerBase
                     Estatus = v.Estatus,
                     EstatusNombre = v.EstatusNavigation.Nombre,
                     FechaCreacion = v.FechaCreacion,
-                    TotalParadas = v.Paradas.Count,
-                    TotalStaff = v.Staff.Count,
-                    TotalIncidencias = v.Incidencias.Count
+
+                    TotalIncidencias = v.Incidencias.Count,
+                    
+                    // Coordenadas
+                    LatitudOrigen = v.PlantillaRuta.PuntoPartidaLat,
+                    LongitudOrigen = v.PlantillaRuta.PuntoPartidaLong,
+                    LatitudDestino = v.PlantillaRuta.PuntoLlegadaLat,
+                    LongitudDestino = v.PlantillaRuta.PuntoLlegadaLong,
+                    
+                    // Paradas
+                    Paradas = v.Paradas.Select(p => new ParadaResponseDto
+                    {
+                        ParadaViajeID = p.ParadaViajeID,
+                        NombreParada = p.NombreParada,
+                        Latitud = p.Latitud,
+                        Longitud = p.Longitud,
+                        OrdenParada = p.OrdenParada,
+                        HoraEstimadaLlegada = p.HoraEstimadaLlegada
+                    }).OrderBy(p => p.OrdenParada).ToList()
                 })
                 .ToListAsync();
 
@@ -200,7 +216,24 @@ public class ViajesController : ControllerBase
                     FechaCreacion = v.FechaCreacion,
                     TotalParadas = v.Paradas.Count,
                     TotalStaff = v.Staff.Count,
-                    TotalIncidencias = v.Incidencias.Count
+                    TotalIncidencias = v.Incidencias.Count,
+                    
+                    // Coordenadas
+                    LatitudOrigen = v.PlantillaRuta.PuntoPartidaLat,
+                    LongitudOrigen = v.PlantillaRuta.PuntoPartidaLong,
+                    LatitudDestino = v.PlantillaRuta.PuntoLlegadaLat,
+                    LongitudDestino = v.PlantillaRuta.PuntoLlegadaLong,
+                    
+                    // Paradas
+                    Paradas = v.Paradas.Select(p => new ParadaResponseDto
+                    {
+                        ParadaViajeID = p.ParadaViajeID,
+                        NombreParada = p.NombreParada,
+                        Latitud = p.Latitud,
+                        Longitud = p.Longitud,
+                        OrdenParada = p.OrdenParada,
+                        HoraEstimadaLlegada = p.HoraEstimadaLlegada
+                    }).OrderBy(p => p.OrdenParada).ToList()
                 })
                 .ToList();
 
@@ -262,7 +295,24 @@ public class ViajesController : ControllerBase
                     FechaCreacion = v.FechaCreacion,
                     TotalParadas = v.Paradas.Count,
                     TotalStaff = v.Staff.Count,
-                    TotalIncidencias = v.Incidencias.Count
+                    TotalIncidencias = v.Incidencias.Count,
+                    
+                    // Coordenadas
+                    LatitudOrigen = v.PlantillaRuta.PuntoPartidaLat,
+                    LongitudOrigen = v.PlantillaRuta.PuntoPartidaLong,
+                    LatitudDestino = v.PlantillaRuta.PuntoLlegadaLat,
+                    LongitudDestino = v.PlantillaRuta.PuntoLlegadaLong,
+                    
+                    // Paradas
+                    Paradas = v.Paradas.Select(p => new ParadaResponseDto
+                    {
+                        ParadaViajeID = p.ParadaViajeID,
+                        NombreParada = p.NombreParada,
+                        Latitud = p.Latitud,
+                        Longitud = p.Longitud,
+                        OrdenParada = p.OrdenParada,
+                        HoraEstimadaLlegada = p.HoraEstimadaLlegada
+                    }).OrderBy(p => p.OrdenParada).ToList()
                 })
                 .FirstOrDefaultAsync();
 

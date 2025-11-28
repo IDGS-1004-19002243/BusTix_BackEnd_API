@@ -43,5 +43,12 @@ public class ViajeResponseDto
     public int TotalParadas { get; set; }
     public int TotalStaff { get; set; }
     public int TotalIncidencias { get; set; }
+
+    // Coordenadas y Paradas
+    public decimal LatitudOrigen { get; set; }
+    public decimal LongitudOrigen { get; set; }
+    public decimal? LatitudDestino { get; set; }
+    public decimal? LongitudDestino { get; set; }
+    public List<ParadaResponseDto> Paradas { get; set; } = new();
 }
 
