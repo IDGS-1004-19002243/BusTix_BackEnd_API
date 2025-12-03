@@ -894,6 +894,68 @@ namespace prjBusTix.Controllers
             });
         }
 
+        // api/account/{userId} (Actualizar usuario por Admin)
+        [HttpPut("{userId}")]
+        [Authorize(Roles = "Admin")]
+        public async Task<IActionResult> UpdateUserByAdmin(string userId, [FromBody] UpdateUserDto updateDto)
+        {
+            if (!ModelState.IsValid)
+                return BadRequest(ModelState);
+
+            var user = await _userManager.FindByIdAsync(userId);
+            if (user == null)
+            {
+                return NotFound(new AuthResponseDto { IsSuccess = false, Message = "User not found" });
+            }
+
+            // No permitimos cambiar el email por aquí (requiere flujo de confirmación)
+            if (!string.IsNullOrWhiteSpace(updateDto.NombreCompleto))
+                user.NombreCompleto = updateDto.NombreCompleto;
+
+            if (!string.IsNullOrWhiteSpace(updateDto.PhoneNumber))
+                user.PhoneNumber = updateDto.PhoneNumber;
+
+            if (!string.IsNullOrWhiteSpace(updateDto.TipoDocumento))
+                user.TipoDocumento = updateDto.TipoDocumento;
+
+            if (!string.IsNullOrWhiteSpace(updateDto.NumeroDocumento))
+                user.NumeroDocumento = updateDto.NumeroDocumento;
+
+            var result = await _userManager.UpdateAsync(user);
+            if (!result.Succeeded)
+            {
+                return BadRequest(new AuthResponseDto { IsSuccess = false, Message = "Error updating user" });
+            }
+
+            var db = HttpContext.RequestServices.GetRequiredService<Data.AppDbContext>();
+            var estatusNombre = await db.EstatusGenerales
+                .Where(e => e.Id_Estatus == user.Estatus)
+                .Select(e => e.Nombre)
+                .FirstOrDefaultAsync();
+
+            var roles = (await _userManager.GetRolesAsync(user)).ToArray();
+
+            var userDto = new UserDetailDto
+            {
+                Id = user.Id,
+                Email = user.Email,
+                NombreCompleto = user.NombreCompleto,
+                Roles = roles,
+                PhoneNumber = user.PhoneNumber,
+                PhoneNumberConfirmed = user.PhoneNumberConfirmed,
+                AccessFailedCount = user.AccessFailedCount,
+                Estatus = user.Estatus,
+                EstatusNombre = estatusNombre,
+                FechaRegistro = user.FechaRegistro,
+                TipoDocumento = user.TipoDocumento,
+                NumeroDocumento = user.NumeroDocumento,
+                EmailConfirmed = user.EmailConfirmed
+            };
+
+            return Ok(userDto);
+        }
+
+
         // api/account/stats (Estadísticas de usuarios - Solo Admin)
         [HttpGet("stats")]
         [Authorize(Roles = "Admin")]
